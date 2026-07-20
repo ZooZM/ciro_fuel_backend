@@ -1,0 +1,12 @@
+// 7 sequential lifecycle states + 2 terminal states = 9 values total (FR-006).
+export enum OrderStatus {
+  PENDING_APPROVAL = 'PENDING_APPROVAL',
+  APPROVED = 'APPROVED',
+  ASSIGNED_TO_DRIVER = 'ASSIGNED_TO_DRIVER',
+  PENDING_PAYMENT = 'PENDING_PAYMENT',
+  IN_TRANSIT = 'IN_TRANSIT',
+  UNLOADING = 'UNLOADING',
+  DELIVERED = 'DELIVERED',
+  REJECTED = 'REJECTED',
+  CANCELLED = 'CANCELLED',
+}

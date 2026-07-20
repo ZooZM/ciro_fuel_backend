@@ -1,0 +1,16 @@
+node_modules/
+dist/
+build/
+coverage/
+.git/
+.github/
+*.log
+.env*
+sys_storge/*
+!sys_storge/.gitkeep
+test/
+specs/
+.vscode/
+.idea/
+Dockerfile*
+.dockerignore

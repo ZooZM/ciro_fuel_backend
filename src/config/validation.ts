@@ -1,0 +1,27 @@
+import * as Joi from 'joi';
+
+export const validationSchema = Joi.object({
+  NODE_ENV: Joi.string().valid('development', 'production', 'test').default('development'),
+  PORT: Joi.number().default(3000),
+  MONGODB_URI: Joi.string().uri().required(),
+  REDIS_URL: Joi.string().uri().required(),
+  JWT_SECRET: Joi.string().min(16).required(),
+  JWT_EXPIRES_IN: Joi.string().default('15m'),
+  JWT_REFRESH_SECRET: Joi.string().min(16).required(),
+  JWT_REFRESH_EXPIRES_IN: Joi.string().default('7d'),
+  PAYMENT_SADAD_SECRET: Joi.string().allow('').default(''),
+  PAYMENT_MADA_SECRET: Joi.string().allow('').default(''),
+  PAYMENT_DEADLINE_MINUTES: Joi.number().default(30),
+  OTP_EXPIRY_MINUTES: Joi.number().default(30),
+  STORAGE_DIR: Joi.string().default('sys_storge'),
+  MAX_FILE_SIZE_BYTES: Joi.number().default(10 * 1024 * 1024),
+  THROTTLE_TTL: Joi.number().default(60),
+  THROTTLE_LIMIT: Joi.number().default(100),
+  PRESENCE_OFFLINE_MINUTES: Joi.number().default(6),
+  PRESENCE_SWEEP_SECONDS: Joi.number().default(60),
+  TRACKING_DISPLACEMENT_METERS: Joi.number().default(50),
+  TRACKING_HEARTBEAT_MINUTES: Joi.number().default(3),
+  SUPER_ADMIN_EMAIL: Joi.string().email().optional(),
+  SUPER_ADMIN_PASSWORD: Joi.string().min(8).optional(),
+  SUPER_ADMIN_FULL_NAME: Joi.string().optional(),
+});

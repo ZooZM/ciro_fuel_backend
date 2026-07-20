@@ -1,0 +1,224 @@
+### Smoke test — full primary flow (US1), per quickstart.md step 4.
+### Use with the VS Code "REST Client" extension (or any tool that reads
+### this format). Run requests top-to-bottom; each depends on the previous
+### response via the {{variable}} captures.
+
+@baseUrl = http://localhost:3000/api/v1
+@sadadSecret = change-me
+
+### 1. Login as the seeded platform owner (see `npm run seed:super-admin`)
+# @name superAdminLogin
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "owner@example.com",
+  "password": "change-me-please-16chars"
+}
+
+###
+@superAdminToken = {{superAdminLogin.response.body.accessToken}}
+
+### 2. Register a company (multipart: fields + commercial register file)
+# @name createCompany
+POST {{baseUrl}}/companies
+Authorization: Bearer {{superAdminToken}}
+Content-Type: multipart/form-data; boundary=----smoke
+
+------smoke
+Content-Disposition: form-data; name="name"
+
+Smoke Test Logistics
+------smoke
+Content-Disposition: form-data; name="contactEmail"
+
+contact@smoketest.example
+------smoke
+Content-Disposition: form-data; name="contactPhone"
+
++966500000000
+------smoke
+Content-Disposition: form-data; name="adminEmail"
+
+admin@smoketest.example
+------smoke
+Content-Disposition: form-data; name="adminFullName"
+
+Smoke Admin
+------smoke
+Content-Disposition: form-data; name="adminPhone"
+
++966500000001
+------smoke
+Content-Disposition: form-data; name="adminPassword"
+
+Password123!
+------smoke
+Content-Disposition: form-data; name="commercialRegister"; filename="register.pdf"
+Content-Type: application/pdf
+
+< ./fixtures/sample-register.pdf
+------smoke--
+
+###
+@companyId = {{createCompany.response.body.company._id}}
+
+### 3. Login as the new company admin
+# @name adminLogin
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "admin@smoketest.example",
+  "password": "Password123!"
+}
+
+###
+@adminToken = {{adminLogin.response.body.accessToken}}
+
+### 4. Set a base fuel price
+PUT {{baseUrl}}/companies/{{companyId}}/fuel-prices
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "prices": [{ "fuelType": "DIESEL", "basePricePerLiter": 2.5 }]
+}
+
+### 5. Create a client (fuel station)
+# @name createClient
+POST {{baseUrl}}/users
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "role": "CLIENT",
+  "email": "client@smoketest.example",
+  "password": "Password123!",
+  "fullName": "Smoke Client",
+  "phone": "+966500000002",
+  "stationLocation": { "longitude": 46.6753, "latitude": 24.7136 }
+}
+
+### 6. Create a driver with a truck
+# @name createDriver
+POST {{baseUrl}}/users
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{
+  "role": "DRIVER",
+  "email": "driver@smoketest.example",
+  "password": "Password123!",
+  "fullName": "Smoke Driver",
+  "phone": "+966500000003",
+  "truck": { "plateNumber": "SMK-1", "maxCapacityLiters": 5000, "fuelTypes": ["DIESEL"] }
+}
+
+### 7. Login as the client
+# @name clientLogin
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "client@smoketest.example",
+  "password": "Password123!"
+}
+
+###
+@clientToken = {{clientLogin.response.body.accessToken}}
+
+### 8. Client creates an order (see Estimated Price in the response)
+# @name createOrder
+POST {{baseUrl}}/orders
+Authorization: Bearer {{clientToken}}
+Content-Type: application/json
+
+{
+  "fuelType": "DIESEL",
+  "quantityLiters": 500
+}
+
+###
+@orderId = {{createOrder.response.body._id}}
+
+### 9. Admin approves (sets Final Price, auto-dispatch assigns the driver)
+# @name approveOrder
+PATCH {{baseUrl}}/orders/{{orderId}}/approve
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+
+{}
+
+###
+@finalPrice = {{approveOrder.response.body.finalPrice}}
+
+### 10. Simulate the Sadad payment webhook confirming payment
+### NOTE: X-Signature must be HMAC-SHA256(rawBody, PAYMENT_SADAD_SECRET) —
+### compute it out-of-band (openssl/node) since REST Client can't do this inline:
+###   node -e "console.log(require('crypto').createHmac('sha256','change-me').update(process.argv[1]).digest('hex'))" '<raw-json-body>'
+POST {{baseUrl}}/payments/webhook/sadad
+Content-Type: application/json
+X-Signature: <computed-hmac-signature>
+
+{
+  "transactionId": "SDD-SMOKE-0001",
+  "orderId": "{{orderId}}",
+  "amount": {{finalPrice}},
+  "currency": "SAR",
+  "status": "PAID",
+  "paidAt": "2026-07-19T10:00:00Z"
+}
+
+### 11. Login as the driver
+# @name driverLogin
+POST {{baseUrl}}/auth/login
+Content-Type: application/json
+
+{
+  "email": "driver@smoketest.example",
+  "password": "Password123!"
+}
+
+###
+@driverToken = {{driverLogin.response.body.accessToken}}
+
+### 12. Driver signals arrival — generates the Arrival OTP (client-only, see next step)
+POST {{baseUrl}}/orders/{{orderId}}/arrive
+Authorization: Bearer {{driverToken}}
+
+### 13. Client reads the current (arrival) OTP
+# @name arrivalOtp
+GET {{baseUrl}}/orders/{{orderId}}/otp/current
+Authorization: Bearer {{clientToken}}
+
+### 14. Driver verifies the arrival OTP → order moves to UNLOADING
+POST {{baseUrl}}/orders/{{orderId}}/verify-arrival
+Authorization: Bearer {{driverToken}}
+Content-Type: application/json
+
+{
+  "otp": "{{arrivalOtp.response.body.otp}}"
+}
+
+### 15. Driver requests the delivery OTP
+POST {{baseUrl}}/orders/{{orderId}}/request-delivery-otp
+Authorization: Bearer {{driverToken}}
+
+### 16. Client reads the current (delivery) OTP
+# @name deliveryOtp
+GET {{baseUrl}}/orders/{{orderId}}/otp/current
+Authorization: Bearer {{clientToken}}
+
+### 17. Driver verifies the delivery OTP → order moves to DELIVERED
+POST {{baseUrl}}/orders/{{orderId}}/verify-delivery
+Authorization: Bearer {{driverToken}}
+Content-Type: application/json
+
+{
+  "otp": "{{deliveryOtp.response.body.otp}}"
+}
+
+### 18. Confirm final state and full status history
+GET {{baseUrl}}/orders/{{orderId}}
+Authorization: Bearer {{adminToken}}

@@ -1,0 +1,27 @@
+# Node
+node_modules/
+dist/
+build/
+coverage/
+*.log
+npm-debug.log*
+
+# Env
+.env
+.env.*
+!.env.example
+
+# Storage (binding constraint: directory must remain exactly "sys_storge")
+sys_storge/*
+!sys_storge/.gitkeep
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.tmp
+*.swp
+
+# Tests
+test/**/*.snap

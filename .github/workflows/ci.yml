@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  guard-entrypoint:
+    name: Guard entry-point constraint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail if root index.ts/index.js exists
+        run: |
+          if find src -maxdepth 1 \( -name "index.ts" -o -name "index.js" \) | grep -q .; then
+            echo "::error::Root-level index.ts/index.js is forbidden. Entry file must be src/server.ts."
+            exit 1
+          fi
+          echo "OK: no root index.ts/index.js found."
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    needs: guard-entrypoint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - run: npm ci
+      - run: npm run lint:check
+
+  test:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    needs: guard-entrypoint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - run: npm ci
+      - run: npm test
+
+  e2e:
+    name: E2E tests
+    runs-on: ubuntu-latest
+    needs: guard-entrypoint
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      REDIS_URL: redis://localhost:6379
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - run: npm ci
+      - run: npm run test:e2e
+
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    needs: [lint, test, e2e]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+      - run: npm ci
+      - run: npm run build
+
+  docker:
+    name: Docker build
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t ciro-fuel-platform:ci .

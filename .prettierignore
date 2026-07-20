@@ -1,0 +1,6 @@
+node_modules/
+dist/
+build/
+coverage/
+sys_storge/
+package-lock.json
