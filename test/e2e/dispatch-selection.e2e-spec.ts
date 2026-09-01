@@ -352,13 +352,27 @@ describe('Smart driver dispatch (US3) — selection rules', () => {
   // classification, and that ELIGIBLE still ranks first (FR-003).
   it('includes inactive, offline and busy drivers too, each correctly classified, with ELIGIBLE ranked first', async () => {
     const fixture = await seedCompanyWithDrivers(app);
-    const inactive = await fixture.makeDriver({ label: 'inactive', offsetDegrees: 0.01, isActive: false });
-    const offline = await fixture.makeDriver({ label: 'offline', offsetDegrees: 0.02, isOnline: false });
-    const busy = await fixture.makeDriver({ label: 'busy', offsetDegrees: 0.03, isAvailable: false });
+    const inactive = await fixture.makeDriver({
+      label: 'inactive',
+      offsetDegrees: 0.01,
+      isActive: false,
+    });
+    const offline = await fixture.makeDriver({
+      label: 'offline',
+      offsetDegrees: 0.02,
+      isOnline: false,
+    });
+    const busy = await fixture.makeDriver({
+      label: 'busy',
+      offsetDegrees: 0.03,
+      isAvailable: false,
+    });
     const eligible = await fixture.makeDriver({ label: 'eligible', offsetDegrees: 1 });
 
     const { candidates } = await createApproveAndGetCandidates(fixture);
-    const byId = new Map(candidates.map((c: { _id: string; eligibility: string }) => [c._id, c.eligibility]));
+    const byId = new Map(
+      candidates.map((c: { _id: string; eligibility: string }) => [c._id, c.eligibility]),
+    );
     expect(byId.get(inactive.id)).toBe(DriverEligibility.INACTIVE);
     expect(byId.get(offline.id)).toBe(DriverEligibility.OFFLINE);
     expect(byId.get(busy.id)).toBe(DriverEligibility.BUSY);
@@ -371,7 +385,11 @@ describe('Smart driver dispatch (US3) — selection rules', () => {
   // BUSY-only roster shows that one driver, marked BUSY, not an empty list.
   it('shows a BUSY-only driver rather than an empty list, and the order stays ROUTED_TO_TRANSPORT since nothing auto-assigns', async () => {
     const fixture = await seedCompanyWithDrivers(app);
-    const busyOnly = await fixture.makeDriver({ label: 'busy-only', offsetDegrees: 0.01, isAvailable: false });
+    const busyOnly = await fixture.makeDriver({
+      label: 'busy-only',
+      offsetDegrees: 0.01,
+      isAvailable: false,
+    });
 
     const { orderId, candidates } = await createApproveAndGetCandidates(fixture);
     expect(candidates.map((c: { _id: string; eligibility: string }) => c.eligibility)).toEqual([

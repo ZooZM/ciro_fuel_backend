@@ -53,9 +53,8 @@ describe('Dispatch candidates (spec 010 US1) — every driver, correctly classif
     return orderId;
   }
 
-  it('includes offline, busy, never-connected and deactivated drivers, each correctly classified, and never another company\'s driver (FR-001, FR-002, FR-006, tenant isolation)', async () => {
+  it("includes offline, busy, never-connected and deactivated drivers, each correctly classified, and never another company's driver (FR-001, FR-002, FR-006, tenant isolation)", async () => {
     const usersService = app.get(UsersService);
-    const authService = app.get(AuthService);
     const transportCompanyId = fixtures.companyA.transportCompanyId;
     const center = fixtures.companyA.driver.location;
 
@@ -166,9 +165,11 @@ describe('Dispatch candidates (spec 010 US1) — every driver, correctly classif
         status: CompanyStatus.ACTIVE,
       },
     );
-    await companiesService.assignRegions(fixtures.companyA.companyId, String(emptyTransportCompany._id), [
-      RegionCode.RIYADH,
-    ]);
+    await companiesService.assignRegions(
+      fixtures.companyA.companyId,
+      String(emptyTransportCompany._id),
+      [RegionCode.RIYADH],
+    );
     const emptyTransportAdmin = await usersService.create({
       companyId: emptyTransportCompany._id as never,
       role: UserRole.TRANSPORT_COMPANY_ADMIN,

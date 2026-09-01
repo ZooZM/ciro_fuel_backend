@@ -73,6 +73,7 @@ describe('SessionAuditService (spec 006 FR-043–046)', () => {
     await service.revoked(SUBJECT, SessionRevocationCause.PASSWORD_RESET);
 
     const serialized = JSON.stringify(model.created);
+    expect(serialized).toBeTruthy();
     // The row can only ever contain what SessionSubject + the fixed shape
     // allow — there is no field this service could plausibly leak a secret
     // through, but this pins that down concretely rather than by

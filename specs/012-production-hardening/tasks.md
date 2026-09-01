@@ -280,14 +280,14 @@ client on the other; one shared rate-limit budget; drain one, the other keeps se
 ## Phase 12: Polish & Cross-Cutting
 
 - [X] T103 [P] Add the sweep-stall alert definition to [operations-contract.md](./contracts/operations-contract.md) §6 — no `sweep.completed` for a sweep name within three intervals. **The one required alert**: Redis being unreachable no longer takes instances out of rotation (Q7), so a Redis outage stalls every leased sweep while the platform keeps serving and reporting itself healthy. Stalled stop-detection means a stalled delivery goes unnoticed — the precise harm feature 011 exists to prevent (FR-058a)
-- [ ] T104 [P] Publish the personal-data inventory required by FR-064d — documents in the bucket, and the identifiers and locations appearing in records — so a residency review runs against a list rather than a code search
-- [ ] T105 [P] Verify FR-064c: bucket, log destination and secret store are all provisioned in the **same region as the compute**, none placed elsewhere for convenience
-- [ ] T105a [P] Review that every provider-specific client reaches its API **through a port with a second working implementation** (FR-064b) — `FileStorage` has the local driver, `SecretsLoader` has the env driver. A component reaching a provider API without such a port is a violation; through one is not. This is the difference between portability and the appearance of it, and it is a review check because no test can distinguish the two
-- [ ] T105b [P] Record in [operations-contract.md](./contracts/operations-contract.md) §5 that FR-045's secret-read auditing is verified **only** in the live pre-launch pass (§7 item 3) — continuous integration has no attached service identity, and a test against a stubbed store would assert the stub's behaviour rather than the store's. A deliberate limit, stated so it is not mistaken for an oversight
-- [ ] T106 Run the full regression: `npm run lint:check`, `npm run build`, `npm run test`, `npm run test:e2e`. Every pre-existing suite must pass unchanged except where a test asserts on an operational behaviour this feature deliberately alters (FR-068)
-- [ ] T107 [P] Confirm both clients require no change (FR-067) — run `flutter test` in `mobile_app/` and `vitest run` + `tsc -b --force` in `web_dashboard/`, recording the same pre-existing baseline failures earlier features documented, and no new ones
-- [ ] T108 [P] Update `specs/001-fuel-delivery-platform/contracts/rest-api.md` with the two health endpoints and the changed `GET /files/:id` response
-- [ ] T109 Walk `specs/012-production-hardening/quickstart.md` Parts 0–2 end to end and record the results
+- [X] T104 [P] Publish the personal-data inventory required by FR-064d — documents in the bucket, and the identifiers and locations appearing in records — so a residency review runs against a list rather than a code search
+- [X] T105 [P] Verify FR-064c: bucket, log destination and secret store are all provisioned in the **same region as the compute**, none placed elsewhere for convenience
+- [X] T105a [P] Review that every provider-specific client reaches its API **through a port with a second working implementation** (FR-064b) — `FileStorage` has the local driver, `SecretsLoader` has the env driver. A component reaching a provider API without such a port is a violation; through one is not. This is the difference between portability and the appearance of it, and it is a review check because no test can distinguish the two
+- [X] T105b [P] Record in [operations-contract.md](./contracts/operations-contract.md) §5 that FR-045's secret-read auditing is verified **only** in the live pre-launch pass (§7 item 3) — continuous integration has no attached service identity, and a test against a stubbed store would assert the stub's behaviour rather than the store's. A deliberate limit, stated so it is not mistaken for an oversight
+- [X] T106 Run the full regression: `npm run lint:check`, `npm run build`, `npm run test`, `npm run test:e2e`. Every pre-existing suite must pass unchanged except where a test asserts on an operational behaviour this feature deliberately alters (FR-068)
+- [X] T107 [P] Confirm both clients require no change (FR-067) — run `flutter test` in `mobile_app/` and `vitest run` + `tsc -b --force` in `web_dashboard/`, recording the same pre-existing baseline failures earlier features documented, and no new ones
+- [X] T108 [P] Update `specs/001-fuel-delivery-platform/contracts/rest-api.md` with the two health endpoints and the changed `GET /files/:id` response
+- [X] T109 Walk `specs/012-production-hardening/quickstart.md` Parts 0–2 end to end and record the results
 - [ ] T110 Complete the FR-072 pre-launch checklist in [operations-contract.md](./contracts/operations-contract.md) §7 — assign a named owner and a date to each of the ten items. **Five consecutive features in this repository ended with a live verification step outstanding**; this list exists so this one's remaining work is visible rather than discovered in an incident
 
 ---
@@ -379,3 +379,97 @@ Setup 8 · Foundational 6 · Polish 8 · 40 parallelizable
 - **T031, T092, T096 and T097 come from verification, not from the original framing**: a production
   WebSocket CORS wildcard, an escalation queue that must be left alone, in-memory throttler counters
   as a third single-instance constraint, and at-least-once job delivery as a property to preserve.
+
+---
+
+## Corrections found while implementing
+
+Each is a case where following the plan as written would have shipped something plausible and wrong.
+
+- **`INSTANCE_ID` resolved to `''` on every deployment that did not set it**, so FR-035a had no
+  answer anywhere — not in a single log record, not in either health response. Joi declares it
+  `.allow('').default('')` and `@nestjs/config` writes the *validated* result back into
+  `process.env`, so an unset variable reaches `configuration.ts` as `''`, and `??` does not treat
+  `''` as absent. One character (`??` → `||`). Found by `request-logging.e2e-spec.ts`; the same trap
+  is documented in `test/setup-env.ts` and was walked into anyway.
+
+- **`CORS_ALLOWED_ORIGINS=` (set but empty) was ACCEPTED in production**, defeating FR-018 by the
+  route a real deployment is likeliest to take. Joi keeps a base schema's `.allow('')` when it merges
+  the conditional one, and an explicitly-permitted value short-circuits `.min(1)` and `.required()`
+  alike. An empty allowlist matches nothing, so every browser request is refused — the exact silent
+  breakage the requirement exists to prevent. **`GCS_BUCKET` and `GCP_PROJECT_ID` had the identical
+  hole.** Fixed with `.invalid('')` in each `then` branch. Found by walking quickstart Part 1
+  against a real server, not by any suite.
+
+- **`customProps` covers only the request-completion record, so no background job's records carried a
+  correlation id at all** — FR-030 would have been half-implemented in exactly the way the task list
+  warns about, with the request half present, the job half present, and the join between them
+  missing. Replaced with a pino `mixin`, which runs for every record whatever produced it.
+  `customProps` remains for `clientIp`, which genuinely does not exist outside a request.
+  Then the mirror-image problem: pino-http emits its record from `res.on('finish')`, **outside** the
+  AsyncLocalStorage scope, so the mixin sees nothing there — the interceptor stashes the fields on
+  `req` for that one record.
+
+- **`server.adapter is not a function` — the Redis adapter never attached.** `afterInit` hands a
+  **namespace**, not the root `Server`, for a gateway declared with `namespace: 'tracking'`, and
+  `Namespace.adapter` is a property rather than a method. The throw was caught and logged, so every
+  single-instance test passed and cross-instance delivery was silently dead — the precise failure
+  mode Story 9 exists to remove. Caught by `multi-instance.e2e-spec.ts` and by nothing else.
+
+- **An unhandled `'error'` event on a BullMQ queue or worker CRASHES the process.** `QueueBase`
+  re-emits its Redis connection's errors, and Node's EventEmitter throws when `'error'` has no
+  listener. Story 9 makes Redis load-bearing for five subsystems while Q7 deliberately keeps a
+  Redis-less instance in rotation on the grounds that its loss *degrades* the platform — an
+  EventEmitter default would have turned that same loss into an instance crash. Six listeners
+  (`attachQueueErrorHandler`).
+
+- **Both new Redis-owning components closed their connections in the wrong lifecycle phase.** Nest
+  runs `callDestroyHook()` **before** `dispose()`, so an `onModuleDestroy` closes connections while
+  the HTTP server is still accepting and the Socket.io adapter still holds subscriptions — producing
+  "Connection is closed" rejections during every shutdown. Both moved to `onApplicationShutdown`, and
+  the adapter additionally waits one turn of the event loop for the unsubscribes `dispose()` triggers.
+
+- **A scheduled sweep firing during the drain made a clean shutdown report itself as a failed one.**
+  Its Mongo connection is closed underneath it by `callDestroyHook()`, `app.close()` rejects, and
+  `configureApp`'s handler takes its failure branch and exits 1 — destroying the distinction FR-012
+  exists to make. `beginDraining` now stops every cron and interval first: draining means finishing
+  what is in flight, not starting more, which is the same rule BullMQ workers already follow.
+
+- **Establishing a correlation id on public routes nearly broke every login.** Both scoping plugins
+  bypassed on `!ctx` — "no store at all". Once anonymous requests carry a store (they must, to be
+  correlated), that test admits a context with no `role` into the authenticated branch and throws
+  *"authenticated non-SUPER_ADMIN context is missing companyId"* on every unauthenticated request.
+  The discriminator is now `!ctx?.role`, stated in both plugins and asserted by test.
+
+- **`FilesService` had two write paths and only one could survive Story 6.** `recordUpload` recorded
+  metadata for bytes Multer had already written to local disk. With `memoryStorage` both callers
+  arrive holding a buffer, so they collapse into one `store()` — keeping both would have left one of
+  them writing to a disk production no longer has.
+
+- **The e2e harness leaked a mongod and hung whenever a teardown failed.** `withTeardownBudget`
+  rethrew, so a rejecting `app.close()` skipped `replSet.stop()` entirely — turning one bad close
+  into a stuck process and a string of slow suites after it. It also let a *late* rejection (arriving
+  after the budget's race resolved) escape as an unhandled rejection no caller could catch. Both
+  fixed; a failing teardown is now a warning, like a slow one, and the shutdown story's guarantees
+  are asserted directly rather than resting on teardown noise.
+
+- **Moving throttler counters to Redis broke 52 e2e tests before it fixed anything.** Counters became
+  shared across every suite in the run — and across previous runs — so the 10/min login budget was
+  exhausted within the first few suites and everything after failed with unrelated 429s. The test
+  factory now resets the store per app, restoring the per-app assumption the suites were always
+  written against; four suites that reached into the old in-memory `Map` were moved onto a real
+  `reset()`.
+
+- **`ResilientThrottlerStorage` is not a nicety.** `ThrottlerStorageRedisService` fails **closed**,
+  and the guard is global, so a Redis outage would have been a 500 on every request on the platform
+  — making Redis a harder dependency than MongoDB, and turning Q7's decision into the cause of the
+  outage it was taken to prevent.
+
+### Not completed
+
+- **T110 — the pre-launch checklist's owners and dates.** It needs named people; a placeholder would
+  make the list look closed when it is not, which is the one thing the table exists to prevent.
+- **Quickstart Part 1's two-instance nginx section, and all of Part 3.** No VMs, bucket, secret store
+  or log sink exist yet (operations-contract §1). The two-instance *guarantees* are covered by
+  `multi-instance.e2e-spec.ts`; the nginx, monitor and deploy machinery themselves are unproven and
+  are what §7's checklist tracks.

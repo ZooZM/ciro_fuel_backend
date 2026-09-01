@@ -6,10 +6,7 @@ import { FilesService } from './files.service';
 import { ObjectIdPipe } from '../../common/pipes/object-id.pipe';
 import { Public } from '../../common/decorators/public.decorator';
 import { LocalFileStorage } from '../../common/storage/local-file-storage';
-import {
-  deriveLocalTokenKey,
-  verifyLocalToken,
-} from '../../common/storage/local-storage-token';
+import { deriveLocalTokenKey, verifyLocalToken } from '../../common/storage/local-storage-token';
 
 /**
  * The local driver's byte route — spec 012 FR-042b, rest-api-delta §2.1.

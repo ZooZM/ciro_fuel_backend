@@ -145,7 +145,11 @@ describe('Assignment reason gate (spec 010 US1 — FR-007/FR-008)', () => {
     await request(app.getHttpServer())
       .post(`/api/v1/dispatch/orders/${firstOrderId}/assign`)
       .set('Authorization', `Bearer ${fixtures.companyA.transportAdmin.token}`)
-      .send({ driverId: String(busy._id), truckId: firstVehicle.truckId, tankId: firstVehicle.tankId })
+      .send({
+        driverId: String(busy._id),
+        truckId: firstVehicle.truckId,
+        tankId: firstVehicle.tankId,
+      })
       .expect(201);
 
     const secondOrderId = await routeAnOrder();

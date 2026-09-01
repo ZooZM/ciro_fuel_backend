@@ -14,10 +14,7 @@ import { PAYMENT_TIMEOUT_QUEUE } from './payment-timeout-queue.service';
 import { UserRole } from '../../../common/enums/user-role.enum';
 import { TenantContextService } from '../../../common/context/tenant-context.service';
 import { attachQueueErrorHandler } from '../../../common/queues/queue-error-handling';
-import {
-  CorrelatedJobData,
-  runWithJobCorrelation,
-} from '../../../common/logging/job-correlation';
+import { CorrelatedJobData, runWithJobCorrelation } from '../../../common/logging/job-correlation';
 
 /**
  * Fires exactly once per order (BullMQ delayed job, jobId = orderId) after
@@ -89,7 +86,10 @@ export class PaymentTimeoutProcessor extends WorkerHost implements OnModuleInit 
     }
     if (order.status !== OrderStatus.PENDING_PAYMENT) {
       // Webhook (or an admin cancellation) already moved the order on — expected race loss.
-      this.logger.debug({ orderId, status: order.status }, 'Payment timeout skipped — status already moved on');
+      this.logger.debug(
+        { orderId, status: order.status },
+        'Payment timeout skipped — status already moved on',
+      );
       return;
     }
 

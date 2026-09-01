@@ -102,12 +102,21 @@ export const validationSchema = Joi.object({
   // happily and every browser request is refused, which presents as an
   // authentication failure and gets diagnosed as one. Refusing to start is the
   // louder, cheaper failure. Same `.when` idiom as SMS_PROVIDER above.
+  // `.invalid('')` in the `then` branch is NOT redundant with `.min(1)`.
+  // Joi keeps the base schema's `.allow('')` when it merges the conditional
+  // one, and an explicitly-permitted value short-circuits every other rule —
+  // so `CORS_ALLOWED_ORIGINS=` (set but empty) was ACCEPTED in production,
+  // producing exactly the outcome this requirement exists to prevent: an empty
+  // allowlist matches nothing, every browser request is refused, and it
+  // presents as an authentication failure. `.invalid('')` moves the empty
+  // string out of the permitted set so `.required()` is meaningful again.
+  // Found by walking quickstart Part 1 against a real server.
   CORS_ALLOWED_ORIGINS: Joi.string()
     .allow('')
     .default('')
     .when('NODE_ENV', {
       is: 'production',
-      then: Joi.string().min(1).required(),
+      then: Joi.string().min(1).invalid('').required(),
     }),
 
   // Story 4 — deliberately NO `.default()`. 1 if nginx is the only proxy, 2 if
@@ -129,10 +138,13 @@ export const validationSchema = Joi.object({
   // dependencies (FR-042). GCS_BUCKET is required only when the gcs driver is
   // selected, so a local run never needs a bucket name.
   STORAGE_DRIVER: Joi.string().valid('local', 'gcs').default('local'),
+  // `.invalid('')` for the same reason as CORS_ALLOWED_ORIGINS above: without
+  // it, `GCS_BUCKET=` with the gcs driver starts the platform and every upload
+  // then fails against an unnamed bucket.
   GCS_BUCKET: Joi.string()
     .allow('')
     .default('')
-    .when('STORAGE_DRIVER', { is: 'gcs', then: Joi.string().min(1).required() }),
+    .when('STORAGE_DRIVER', { is: 'gcs', then: Joi.string().min(1).invalid('').required() }),
   SIGNED_URL_TTL_SECONDS: Joi.number().min(30).max(3600).default(300),
   LOCAL_STORAGE_TOKEN_TTL_SECONDS: Joi.number().min(30).max(3600).default(300),
   LOCAL_STORAGE_TOKEN_SECRET: Joi.string().allow('').default(''),
@@ -142,10 +154,13 @@ export const validationSchema = Joi.object({
   // exactly as a missing config value does, because the loader populates
   // process.env before Nest boots (FR-049).
   SECRETS_DRIVER: Joi.string().valid('env', 'gcp').default('env'),
+  // Same hole, and the worst of the three: an empty project id with the gcp
+  // driver would reach `loadSecrets`, which throws — but only after the
+  // process has already been reported as configured.
   GCP_PROJECT_ID: Joi.string()
     .allow('')
     .default('')
-    .when('SECRETS_DRIVER', { is: 'gcp', then: Joi.string().min(1).required() }),
+    .when('SECRETS_DRIVER', { is: 'gcp', then: Joi.string().min(1).invalid('').required() }),
   SECRETS_MANIFEST: Joi.string().allow('').default(''),
 
   // Story 8 — explicit pool bounds and timeouts so a brief interruption fails

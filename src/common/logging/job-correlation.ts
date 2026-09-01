@@ -58,5 +58,8 @@ export function runWithJobCorrelation<T>(
   data: CorrelatedJobData | undefined,
   callback: () => T,
 ): T {
-  return tenantContext.runWithCorrelationId(data?.[CORRELATION_JOB_FIELD] ?? randomUUID(), callback);
+  return tenantContext.runWithCorrelationId(
+    data?.[CORRELATION_JOB_FIELD] ?? randomUUID(),
+    callback,
+  );
 }

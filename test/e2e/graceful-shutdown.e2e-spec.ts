@@ -126,6 +126,13 @@ describe('Graceful shutdown (spec 012 US2)', () => {
       const ctx = await createTestApp();
       const fixtures = await seedTwoCompanies(ctx.app);
 
+      // Captured BEFORE the socket exists. Read after connecting, the baseline
+      // can already BE the value the wait below is waiting to exceed, and the
+      // loop then spins until its deadline — which is how this test failed
+      // after the wait was first added.
+      const userModel = ctx.app.get<Model<UserDocument>>(getModelToken(User.name));
+      const baseline = (await userModel.findById(fixtures.companyA.driver.id).exec())?.lastSeenAt;
+
       const socket = io(`${ctx.url}/tracking`, {
         auth: { token: fixtures.companyA.driver.token },
         transports: ['websocket'],
@@ -153,13 +160,11 @@ describe('Graceful shutdown (spec 012 US2)', () => {
       // and `app.close()` rejects with MongoClientClosedError. The driver being
       // marked online IS that write completing, so this is a real signal rather
       // than a sleep.
-      const userModel = ctx.app.get<Model<UserDocument>>(getModelToken(User.name));
       // Waits on `lastSeenAt` ADVANCING, not on `isOnline` — the fixture driver
       // is seeded `isOnline: true`, so an `isOnline` check passes on its first
       // read and waits for nothing at all. `lastSeenAt` is what
-      // `presenceService.touch()` writes, so its advance past this baseline is
-      // the write completing.
-      const baseline = (await userModel.findById(fixtures.companyA.driver.id).exec())?.lastSeenAt;
+      // `presenceService.touch()` writes, so its advance past the baseline
+      // captured above is that write completing.
       const deadline = Date.now() + 10_000;
       let touched = false;
       while (!touched && Date.now() < deadline) {
@@ -176,10 +181,9 @@ describe('Graceful shutdown (spec 012 US2)', () => {
       });
 
       // Drives the REAL drain sequence rather than jumping straight to
-      // `close()`. A signal flips the gate first, which is what stops the
-      // scheduled sweeps — without it a sweep firing in the close window has
-      // its Mongo connection pulled out from under it and `app.close()` rejects
-      // (see `ShutdownService.stopScheduledWork`). Production always takes this
+      // `close()`: a signal flips the gate first, which is what stops the
+      // scheduled sweeps so none begins in the close window
+      // (`ShutdownService.stopScheduledWork`). Production always takes this
       // path, so the test should too.
       ctx.app.get(ShutdownService).beginDraining('SIGTERM');
       await ctx.close();

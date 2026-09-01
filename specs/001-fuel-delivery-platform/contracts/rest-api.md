@@ -393,8 +393,37 @@ are listed; in-flight webhook noise is not payment history.
 
 | Method | Path | Roles | Notes |
 |--------|------|-------|-------|
-| POST | `/files` | any authenticated | multipart `file` + `{ purpose }`; MIME allowlist, ≤ 10 MB; stored under `sys_storge/{companyId}/` (FR-020) |
-| GET | `/files/:id` | same-company roles per purpose; SUPER_ADMIN | streams file; 404 cross-tenant |
+| POST | `/files` | any authenticated | multipart `file` + `{ purpose }`; MIME allowlist, ≤ 10 MB; key `sys_storge/{companyId}/…` (FR-020). Request and response unchanged by spec 012 |
+| GET | `/files/:id` | same-company roles per purpose; SUPER_ADMIN | **302** to a short-lived single-object location, `Cache-Control: no-store`; 404 cross-tenant |
+| GET | `/files/:id/content?token=…` | **`@Public()`** — the token is the authorization | **local storage driver only**; not registered under `STORAGE_DRIVER=gcs` |
+
+**`GET /files/:id` answers a 302, not bytes** (spec 012 FR-039/FR-042a). The tenant-scoped read runs
+BEFORE anything is signed, so a signed location is never issued for a document the caller may not
+see — a cross-tenant id still 404s and never 403s. The redirect target carries no credential of the
+platform's, deliberately: clients differ in whether they forward `Authorization` across a redirect,
+and an object store refuses a request bearing both a signed URL and that header (FR-038c).
+
+The status is 302 under **every** driver including local. Had local returned bytes, the redirect
+would first have executed in production — the production-only path this hardening work exists to
+remove. `storagePath` keeps its name and type in the response; only its content changed, from an
+absolute filesystem path to an object key.
+
+## Health (`/health`) — added in spec 012
+
+| Method | Path | Roles | Notes |
+|--------|------|-------|-------|
+| GET | `/health/live` | **`@Public()`**, `@SkipThrottle()` | Is the process running — **no dependency checks**. Always 200 while the process is up |
+| GET | `/health/ready` | **`@Public()`**, `@SkipThrottle()` | Should a proxy send traffic. **200** with both dependencies up; **503** when MongoDB is unreachable or the instance is draining |
+
+**MongoDB is the only disqualifying dependency.** Redis is checked and reported — alongside the
+`rateLimiting` and `realtimeFanout` capabilities it backs — but never changes the verdict, so a
+**200 with a `down` entry in `error` is correct and deliberate**. Disqualifying on Redis would take
+every instance out of rotation at the same instant and leave the proxy with an empty upstream,
+converting a partial degradation into a total outage.
+
+Liveness performs no dependency checks on purpose: a liveness probe wired to dependency health makes
+an orchestrator restart instances whose own process is fine, turning a database incident into a
+restart storm on top of it. Full contract: `specs/012-production-hardening/contracts/health-contract.md`.
 
 ## Notifications (`/notifications`) — paginated in spec 005
 

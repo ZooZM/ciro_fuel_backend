@@ -109,7 +109,9 @@ export class StopDetectionService implements OnModuleInit {
    * method directly without a Redis round trip changing their timing.
    */
   async sweepStalledDeliveries(): Promise<void> {
-    await this.lease.runExclusively(SWEEP_NAMES.STOP_DETECTION, () => this.detectStalledDeliveries());
+    await this.lease.runExclusively(SWEEP_NAMES.STOP_DETECTION, () =>
+      this.detectStalledDeliveries(),
+    );
   }
 
   /**
@@ -383,9 +385,7 @@ export class StopDetectionService implements OnModuleInit {
 
     if (result.modifiedCount === 0) {
       const order = await this.orderModel.findById(orderId).exec();
-      const stop = order?.stopEvents.find(
-        (s) => String((s as { _id?: unknown })._id) === stopId,
-      );
+      const stop = order?.stopEvents.find((s) => String((s as { _id?: unknown })._id) === stopId);
       if (!stop) {
         throw new NotFoundException('Stop not found');
       }
@@ -406,7 +406,7 @@ export class StopDetectionService implements OnModuleInit {
   private async explainDeclineRefusal(
     orderId: string,
     driverId: string,
-    now: Date,
+    _now: Date,
   ): Promise<never> {
     const order = await this.orderModel.findById(orderId).exec();
     // FR-069 discipline, platform-wide: not-found and not-yours are the same
