@@ -1,4 +1,9 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { randomBytes } from 'node:crypto';
 import { Model, Types } from 'mongoose';
@@ -6,6 +11,7 @@ import { Truck, TruckDocument } from './schemas/truck.schema';
 import { ErrorCode } from '../../common/enums/error-code.enum';
 import { CreateTruckDto } from './dto/create-truck.dto';
 import { UpdateTruckDto } from './dto/update-truck.dto';
+import { normalizeCardUid } from '../../common/utils/card-uid.util';
 
 // Mongo's duplicate-key error code — used throughout the codebase to catch a
 // unique-index violation rather than a doomed prior existence check (see
@@ -128,7 +134,14 @@ export class TrucksService {
    * mid-change by the time the operator reads it, which is an acceptable,
    * informational best-effort, not a correctness guarantee).
    */
-  async pairCard(id: string, nfcCardUid: string): Promise<TruckDocument> {
+  async pairCard(id: string, rawCardUid: string): Promise<TruckDocument> {
+    // Stored canonical, never as the desk reader happened to render it — the
+    // driver's phone will render the same card differently, and only a shared
+    // canonical form makes the two comparable (card-uid.util.ts).
+    const nfcCardUid = normalizeCardUid(rawCardUid);
+    if (!nfcCardUid) {
+      throw new BadRequestException('A card identifier is required');
+    }
     try {
       const truck = await this.truckModel
         .findOneAndUpdate(

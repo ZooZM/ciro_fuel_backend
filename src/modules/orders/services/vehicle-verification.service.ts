@@ -17,6 +17,7 @@ import { VerificationMethod } from '../../../common/enums/verification-method.en
 import { VerificationStage } from '../../../common/enums/verification-stage.enum';
 import { GeoPoint } from '../../../common/schemas/geo-point.schema';
 import { haversineDistanceMeters } from '../../../common/utils/geo.util';
+import { cardUidLookupCandidates } from '../../../common/utils/card-uid.util';
 import { OrderStateService, TransitionActor } from './order-state.service';
 
 export interface VerifyVehicleResult {
@@ -247,11 +248,30 @@ export class VehicleVerificationService {
     return undefined;
   }
 
-  private resolveCredential(
+  /**
+   * A QR token is platform-generated and is compared exactly — it has one
+   * rendering, and loosening it would only widen what a guess can hit.
+   *
+   * A card identifier is not the platform's to render: the desk reader that
+   * paired it and the phone presenting it disagree about case, separators,
+   * decimal-vs-hex and byte order for the same physical card. So the presented
+   * value is canonicalized and its candidate renderings are tried in
+   * precedence order (card-uid.util.ts) — one indexed lookup on the happy
+   * path, the rest consulted only when nothing has matched.
+   */
+  private async resolveCredential(
     credential: string,
     method: VerificationMethod,
   ): Promise<TruckDocument | null> {
-    const field = method === VerificationMethod.NFC_CARD ? 'nfcCardUid' : 'qrToken';
-    return this.truckModel.findOne({ [field]: credential }).exec();
+    if (method !== VerificationMethod.NFC_CARD) {
+      return this.truckModel.findOne({ qrToken: credential }).exec();
+    }
+    for (const candidate of cardUidLookupCandidates(credential)) {
+      const truck = await this.truckModel.findOne({ nfcCardUid: candidate }).exec();
+      if (truck) {
+        return truck;
+      }
+    }
+    return null;
   }
 }

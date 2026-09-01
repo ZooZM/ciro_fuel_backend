@@ -76,8 +76,13 @@ describe('Vehicle verification — the departure gate (spec 008 US3)', () => {
     return { rawBody, signature };
   }
 
-  /** An order assigned to company A's driver, awaiting departure verification. */
-  async function assignedOrder(): Promise<string> {
+  /**
+   * An order assigned to company A's driver, awaiting departure verification.
+   * `truckId` defaults to the fixture tractor; pass one to assign a
+   * purpose-built truck instead (used by the card-rendering block below, which
+   * must not disturb the fixture truck's own card or minted token).
+   */
+  async function assignedOrder(truckId?: string): Promise<string> {
     const { client, admin, transportAdmin, driver, truck, tank } = fixtures.companyA;
     const createRes = await request(server)
       .post('/api/v1/orders')
@@ -113,7 +118,7 @@ describe('Vehicle verification — the departure gate (spec 008 US3)', () => {
     await request(server)
       .post(`/api/v1/dispatch/orders/${orderId}/assign`)
       .set('Authorization', `Bearer ${transportAdmin.token}`)
-      .send({ driverId: driver.id, truckId: truck.id, tankId: tank.id })
+      .send({ driverId: driver.id, truckId: truckId ?? truck.id, tankId: tank.id })
       .expect(201);
 
     return orderId;
@@ -376,5 +381,90 @@ describe('Vehicle verification — the departure gate (spec 008 US3)', () => {
       })
       .expect(201)
       .then((res) => expect(res.body.status).toBe(VerificationStage.LOADING));
+  });
+
+  // --- the card-rendering gap ------------------------------------------
+  //
+  // spec 008 assumed the identifier is opaque and so "cards of differing
+  // encodings work without change". That is true of one reader and false of
+  // two. The transporter pairs with a desk-mounted HID reader; the driver
+  // presents the same physical card to a phone. The two render one UID
+  // differently — case, separators, a decimal rather than hex reading, and
+  // often the reverse byte order — so compared raw, the correct card at the
+  // correct truck is refused, permanently. FR-018 makes that refusal
+  // indistinguishable from an unknown card by design, so the failure arrives
+  // with no thread to pull.
+  describe('the same physical card, read by two different devices', () => {
+    let plateSeq = 0;
+
+    // The revocation test above signs the driver in again, which bumps
+    // `sessionGeneration` and kills the fixture's stored token (spec 006 —
+    // one session per driver). Everything below would fail on 401 rather than
+    // on anything it means to assert, so the token is refreshed once here.
+    beforeAll(async () => {
+      const reauth = await app.get(AuthService).login({
+        email: fixtures.companyA.driver.email,
+        password: DEFAULT_PASSWORD,
+      });
+      fixtures.companyA.driver.token = reauth.accessToken;
+    });
+
+    /**
+     * A truck of its own, paired as the desk reader rendered the card — so the
+     * fixture tractor's card and minted QR token are left untouched. Each case
+     * uses a DIFFERENT physical card, because `nfcCardUid` is globally unique
+     * and reusing one would refuse the second pairing rather than test it.
+     */
+    async function truckPairedAs(pairedRendering: string): Promise<string> {
+      const trucks = app.get(TrucksService);
+      const created = await trucks.create(fixtures.companyA.transportCompanyId, {
+        plateNumber: `RENDER-${(plateSeq += 1)}`,
+      });
+      await trucks.pairCard(String(created._id), pairedRendering);
+      return String(created._id);
+    }
+
+    it.each([
+      // [what differs, how the desk reader rendered it, how the phone renders it]
+      ['decimal vs hex', '0077771716', '04:a2:b3:c4'], // 0x04A2B3C4 === 77771716
+      ['separators and case', '11:aa:bb:cc', '11AABBCC'],
+      ['separator style', '22ddeeff', '22-DD-EE-FF'],
+      ['byte order', '3312ABCD', 'cdab1233'],
+    ])(
+      'one card resolves to its truck when the two devices disagree about %s',
+      async (_difference, pairedRendering, presentedRendering) => {
+        const truckId = await truckPairedAs(pairedRendering);
+        const orderId = await assignedOrder(truckId);
+
+        const res = await verify(orderId, presentedRendering).expect(201);
+        expect(res.body.status).toBe(VerificationStage.DEPARTURE);
+        expect(res.body.order.status).toBe(OrderStatus.LOADING);
+      },
+    );
+
+    it('still refuses a genuinely different card (the tolerance is not a wildcard)', async () => {
+      const truckId = await truckPairedAs('5566AABB');
+      const orderId = await assignedOrder(truckId);
+
+      // A real, unrelated card — not another rendering of 0x5566AABB.
+      const res = await verify(orderId, '11:22:33:44').expect(403);
+      expect(res.body.error).toBe(ErrorCode.VEHICLE_MISMATCH);
+      expect((await readOrder(orderId)).status).toBe(OrderStatus.ASSIGNED_TO_DRIVER);
+    });
+
+    it('refuses to pair two renderings of one card to two trucks (FR-005/SC-008)', async () => {
+      await truckPairedAs('0099887766');
+      const second = await app
+        .get(TrucksService)
+        .create(fixtures.companyA.transportCompanyId, { plateNumber: 'RENDER-DUP' });
+
+      // 99887766 decimal === 0x05F42A96. Compared raw these are different
+      // strings, so BOTH pairings would have succeeded and one physical card
+      // could then verify two tractors — precisely what the unique index
+      // exists to prevent.
+      await expect(
+        app.get(TrucksService).pairCard(String(second._id), '05:f4:2a:96'),
+      ).rejects.toMatchObject({ response: { error: ErrorCode.CARD_ALREADY_PAIRED } });
+    });
   });
 });
