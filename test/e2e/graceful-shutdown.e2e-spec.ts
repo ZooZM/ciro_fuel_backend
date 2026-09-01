@@ -205,6 +205,15 @@ describe('Graceful shutdown (spec 012 US2)', () => {
       const ctx = await createTestApp();
       const redis = ctx.app.get<{ status: string }>(REDIS_CLIENT);
 
+      // Same precondition as the worker test above, for the same reason: BullMQ
+      // builds its blocking connection lazily, and closing the app while a
+      // `RedisConnection` is still initialising makes it emit 'error' from its
+      // own constructor — before `QueueBase` has attached the listener that
+      // would handle it. That is an unhandled EventEmitter error no application
+      // code can intercept, because the window is inside the library. Waiting
+      // for the worker removes the window rather than tolerating it.
+      await ctx.app.get(StopEscalationProcessor).worker.waitUntilReady();
+
       // ioredis reports 'connect' then 'ready'; either means an open socket.
       // What matters is that it is NOT already closed before we close the app.
       expect(['ready', 'connect', 'connecting']).toContain(redis.status);

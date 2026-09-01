@@ -20,8 +20,8 @@ Logging for records. What the deployment does **not** supply is orchestration, s
 the scheduler arbitration and the sweep-stall alert are all things this feature builds.
 
 **Implementation status**: all 9 user stories built and verified. Backend `npm run lint:check`
-clean, `npm run build` clean, `npm run test` **175/175 across 21 suites**, `npm run test:e2e`
-**340/340 across 62 suites**. Both clients confirmed unchanged (FR-067): mobile `flutter test` 418
+clean, `npm run build` clean, `npm run test` **187/187 across 22 suites**, `npm run test:e2e`
+**346/346 across 62 suites** (counts include the card-UID work merged in on 2026-09-01). Both clients confirmed unchanged (FR-067): mobile `flutter test` 418
 passing with the same two documented pre-existing non-green tests (`login_screen_golden_test` pixel
 diff, `auth_session_test` `skip: true`); dashboard `vitest run` 49 passing with the same two
 pre-existing suites that fail to *load*, and `tsc -b --force` reporting the same pre-existing
@@ -56,6 +56,10 @@ every single-instance test passed while cross-instance delivery was silently dea
 records carried a correlation id — FR-030 half-implemented in exactly the way the plan warned about.
 Replaced with a `mixin`; the request record, emitted from `res.on('finish')` *outside* the
 AsyncLocalStorage scope, reads its fields off `req` instead.
+· **`TrackingGateway.handleConnection` could crash the instance on every driver connect** — socket.io
+ignores the promise it returns, and both `client.join` (Redis) and `presenceService.touch` (Mongo)
+can reject, so an unawaited rejection would have terminated the process one connect at a time during
+exactly the dependency interruptions Q7 says must only degrade.
 · **An unhandled `'error'` event on a BullMQ queue crashes the process** — which would have turned
 the Redis degradation Q7 designed for into an instance crash.
 · **Establishing a correlation id on public routes nearly broke every login**: both scoping plugins
@@ -505,6 +509,27 @@ action via a new `MapNavigator` seam (T109 had shown the address but never made 
 Verified: backend `npm run test` 127/127, `jest --config test/jest-e2e.json --runInBand` **40
 suites / 174 tests** green (new `test/e2e/loading-geofence.e2e-spec.ts`); mobile `flutter test`
 **362 passing** with only the two documented pre-existing non-green tests.
+
+**Amended 2026-09-01 (`card-uid.util.ts`, commit `505c709`), implemented and green**: spec 008's
+own Assumptions called the NFC identifier "an opaque string ... compared for equality", so "cards of
+differing encodings work without change". **That is true only while one reader is the sole capture
+path, and the platform has two**: the transporter's desk-mounted reader pairs the card, the driver's
+phone presents it, and the two render the same physical UID differently — case, separators, a
+decimal rather than hex reading, and frequently the reverse byte order. Compared raw, a driver would
+present the correct card at the correct truck and be refused — and because FR-018 deliberately makes
+"wrong truck" and "no such card" the same refusal, that failure carries no diagnostic to follow.
+
+Both ends now normalize (`normalizeCardUid`): `TrucksService.pairCard` STORES the canonical form,
+and `VehicleVerificationService.resolveCredential` tries `cardUidLookupCandidates` in **precedence
+order** — canonical, then the raw value, then the byte-reversal — one lookup at a time rather than a
+single `$in`, so an exact match always beats a coincidental byte-reversed one (two distinct cards
+whose UIDs are byte-reverses of each other would otherwise be mutually resolvable). The raw value is
+retained as a candidate so trucks paired before this change keep working without a re-pair.
+Decimal-vs-hex is resolved by **length, not content**: ten digits is the only width a reading cannot
+also be hex, since no card carries a 5-byte UID. The **QR token is still compared exactly** — it is
+platform-generated, has one rendering, and loosening it would only widen what a guess can hit. This
+also strengthens FR-005/SC-008: uniqueness is now enforced on the canonical form, so two renderings
+of one card can no longer pair to two different trucks.
 
 **Also 2026-08-27, separately**: spec 008's test backlog — 37 tasks marked complete in
 implementation but never written — closed in one pass (`tasks.md`'s Notes section has the full

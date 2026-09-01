@@ -423,6 +423,16 @@ Each is a case where following the plan as written would have shipped something 
   EventEmitter default would have turned that same loss into an instance crash. Six listeners
   (`attachQueueErrorHandler`).
 
+- **`TrackingGateway.handleConnection` could crash the instance on every driver connect.** Socket.io
+  invokes it and ignores the returned promise, and both statements in it can reject — `client.join`
+  round-trips through the Redis adapter, `presenceService.touch` is a Mongo write. An unawaited
+  rejecting promise is an unhandled rejection, which terminates the process under Node's default, so
+  during a Mongo or Redis interruption the platform would have gone down one driver connect at a
+  time. Same class as the BullMQ `'error'` emitter, and squarely contrary to Q7: those dependencies
+  are meant to degrade the platform, never crash it. Now caught and recorded; the socket stays
+  connected and both effects self-correct (the client reconnects; the next location frame touches
+  presence). Found while chasing a teardown flake that turned out to be this.
+
 - **Both new Redis-owning components closed their connections in the wrong lifecycle phase.** Nest
   runs `callDestroyHook()` **before** `dispose()`, so an `onModuleDestroy` closes connections while
   the HTTP server is still accepting and the Socket.io adapter still holds subscriptions — producing

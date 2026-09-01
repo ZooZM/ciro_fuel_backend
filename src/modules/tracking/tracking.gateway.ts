@@ -77,12 +77,39 @@ export class TrackingGateway implements OnGatewayConnection, OnApplicationShutdo
     });
   }
 
+  /**
+   * **Socket.io does not await this**, which makes the try/catch load-bearing
+   * rather than defensive (spec 012).
+   *
+   * Both statements below can reject — `join` round-trips through the Redis
+   * adapter, and `touch` is a Mongo write — and an unawaited rejecting promise
+   * is an UNHANDLED REJECTION, which terminates the process under Node's
+   * default. So during a Mongo or Redis interruption every driver socket that
+   * connected would have taken the instance down, one connect at a time. That
+   * is the same class of defect as the BullMQ `'error'` emitter
+   * (`attachQueueErrorHandler`), and it is squarely contrary to Clarification
+   * Q7: those dependencies are meant to DEGRADE the platform, never crash it.
+   *
+   * Degraded here means precisely: the socket stays connected, but it may not
+   * be in its user room (so directed events miss it) and presence may be stale.
+   * Both self-correct — the client reconnects, and the driver's next location
+   * frame touches presence again. Refusing the connection instead would be
+   * worse: it converts a recoverable gap into a reconnect loop against a
+   * dependency that is already struggling.
+   */
   async handleConnection(client: AuthedSocket): Promise<void> {
-    // Every socket joins its own user room so notification:new / order:otp
-    // can address it directly regardless of which order rooms it watches.
-    await client.join(`user:${client.data.user.userId}`);
-    if (client.data.user.role === UserRole.DRIVER) {
-      await this.presenceService.touch(client.data.user.userId);
+    try {
+      // Every socket joins its own user room so notification:new / order:otp
+      // can address it directly regardless of which order rooms it watches.
+      await client.join(`user:${client.data.user.userId}`);
+      if (client.data.user.role === UserRole.DRIVER) {
+        await this.presenceService.touch(client.data.user.userId);
+      }
+    } catch (err) {
+      this.logger.error(
+        { err, userId: client.data.user.userId, role: client.data.user.role },
+        'Socket connection setup failed; the socket stays connected but may miss directed events',
+      );
     }
   }
 
