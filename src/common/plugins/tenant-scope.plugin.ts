@@ -49,8 +49,20 @@ export function createTenantScopePlugin(tenantContext: TenantContextService) {
 
     const resolveCompanyId = (): string | undefined => {
       const ctx = tenantContext.getContext();
-      if (!ctx) {
-        // No context at all (scripts/seeds/tests running outside a request) — bypass.
+      if (!ctx?.role) {
+        // No AUTHENTICATED actor — bypass. Two distinct situations reach here
+        // and both must:
+        //   · a script, seed or test running entirely outside a request (no
+        //     store at all), which is what this check has always covered; and
+        //   · since spec 012, a PUBLIC route (login, refresh, the payment
+        //     webhook), which now DOES have a store because it carries a
+        //     correlation id (FR-029) but establishes no actor.
+        //
+        // Testing `!ctx` alone would have been correct until spec 012 and
+        // silently wrong afterwards: the anonymous store would fall through to
+        // the non-SUPER_ADMIN branch below and throw "missing companyId" on
+        // every login attempt. `role` is the discriminator because a genuine
+        // authenticated context always carries one.
         return undefined;
       }
       if (ctx.role === UserRole.SUPER_ADMIN) {

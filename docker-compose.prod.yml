@@ -1,0 +1,118 @@
+# Production stack — spec 012 (production hardening).
+#
+#   docker compose -f docker-compose.prod.yml up -d
+#
+# STANDALONE, not an overlay on docker-compose.yml. An overlay would leave the
+# base `app` service defined, so a third instance would start alongside the two
+# replicas — binding port 3000, reading `env_file: .env`, and mounting
+# `./sys_storge`. Every one of those is a thing this file exists to prevent, so
+# the two files are kept separate rather than composed.
+#
+# Four differences from the development stack, each tied to a requirement:
+#
+#  1. NO `env_file` and no secret values anywhere. Secrets are fetched at
+#     startup from the managed secret store via the VM's attached service
+#     identity (FR-043), so no image, snapshot or backup contains one. There is
+#     no key file either — the identity is attached to the instance, so there is
+#     nothing to leak or rotate. The few values below are non-secret
+#     configuration, supplied by the deploy environment.
+#
+#  2. NO `./sys_storge` bind mount. Documents live in the regional bucket
+#     (FR-036), so durability is the bucket's rather than one disk's.
+#
+#  3. TWO app replicas behind nginx, each with its own INSTANCE_ID so a record
+#     can be attributed to the instance that produced it (FR-035a).
+#
+#  4. mongo-init is absent: production runs a genuinely multi-member replica
+#     set, initiated as part of provisioning rather than by a throwaway
+#     container on every boot.
+#
+# Deploys do NOT use `docker compose up` for the app. Compose replaces a
+# container by stopping it, which severs in-flight requests, drops realtime
+# connections and kills background jobs part-way through. Use
+# `scripts/rolling-deploy.sh`, which starts the replacement, waits for it to
+# report ready, moves traffic, and only then signals the outgoing instance to
+# drain (FR-012a).
+
+services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "rs.status().ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  app-1: &app
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - mongo
+      - redis
+    environment: &app-env
+      NODE_ENV: production
+      PORT: 3000
+      INSTANCE_ID: app-1
+      MONGODB_URI: mongodb://mongo:27017/ciro_fuel?replicaSet=rs0
+      REDIS_URL: redis://redis:6379
+      SECRETS_DRIVER: gcp
+      GCP_PROJECT_ID: ${GCP_PROJECT_ID:?set GCP_PROJECT_ID}
+      STORAGE_DRIVER: gcs
+      GCS_BUCKET: ${GCS_BUCKET:?set GCS_BUCKET}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:?set CORS_ALLOWED_ORIGINS}
+      # No default anywhere, deliberately (FR-022): 1 if nginx is the only
+      # proxy, 2 if a managed load balancer fronts it. `:?` makes an unset value
+      # a startup failure rather than a silent 1 — guessing wrong attributes
+      # every request on the platform to a single origin, with no error.
+      TRUSTED_PROXY_HOPS: ${TRUSTED_PROXY_HOPS:?establish the topology first}
+      LOG_LEVEL: info
+      LOG_PRETTY: "false"
+    # Bound to loopback: nginx is the only thing that may reach an instance
+    # directly, so the trusted-hop count stays true.
+    ports:
+      - "127.0.0.1:3001:3000"
+
+  app-2:
+    <<: *app
+    environment:
+      <<: *app-env
+      INSTANCE_ID: app-2
+    ports:
+      - "127.0.0.1:3002:3000"
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      - app-1
+      - app-2
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      # Writable, not read-only: the readiness monitor rewrites this file and
+      # reloads nginx when an instance fails readiness (FR-007a).
+      - ./nginx/upstream.conf:/etc/nginx/conf.d/upstream.conf
+      - ./nginx/certs:/etc/nginx/certs:ro
+
+volumes:
+  mongo_data:
+  redis_data:

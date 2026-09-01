@@ -1,0 +1,533 @@
+/**
+ * Seeds one complete, self-consistent set of actors for the order-cycle test
+ * dashboard (`public/`) — a Fuel Company, a Transportation Company serving the
+ * client's region, a client with a station and a driver with a truck, all with
+ * known passwords.
+ *
+ * It drives the public REST API rather than writing to Mongo directly, on
+ * purpose: every actor here is created by the exact role the platform requires
+ * (CIRO registers the Fuel Company, the Fuel Company admin onboards the
+ * transporter and the client, the transporter admin creates its own driver), so
+ * a successful run is itself proof that the onboarding chain works.
+ *
+ * Idempotency comes from a per-run suffix — every run creates a fresh, isolated
+ * set rather than mutating an existing one, which keeps repeated runs safe.
+ *
+ *   npm run seed:dashboard
+ *   BASE_URL=http://localhost:3000/api/v1 npm run seed:dashboard
+ */
+
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { io } from 'socket.io-client';
+
+const BASE_URL = process.env.BASE_URL ?? 'http://localhost:3000/api/v1';
+const SUPER_ADMIN_EMAIL = process.env.SUPER_ADMIN_EMAIL ?? 'owner@example.com';
+const SUPER_ADMIN_PASSWORD = process.env.SUPER_ADMIN_PASSWORD ?? 'change-me-please-16chars';
+
+// One password for every seeded actor — this is throwaway test data whose whole
+// purpose is being easy to type into five login boxes.
+const PASSWORD = process.env.SEED_PASSWORD ?? 'Password123!';
+
+// The client's station must sit in a region the transporter serves, or approval
+// parks the order in AWAITING_ROUTING with no candidates (FR-016) and the
+// dashboard's happy path cannot complete.
+const REGION_CODE = 'RIYADH';
+const GOVERNORATE_CODE = 'RIYADH_CITY';
+const STATION_LOCATION = { longitude: 46.6753, latitude: 24.7136 };
+const SOCKET_URL = BASE_URL.replace(/\/api\/v1$/, '');
+
+// How much fleet/order volume to seed — override for a bigger stress-test fixture,
+// e.g. `DRIVER_COUNT=15 ORDER_COUNT=50 npm run seed:dashboard`.
+const DRIVER_COUNT = Number(process.env.DRIVER_COUNT ?? 6);
+const ORDER_COUNT = Number(process.env.ORDER_COUNT ?? 25);
+
+const suffix = Date.now().toString().slice(-8);
+const tag = (name: string) => `${name}${suffix}`;
+
+interface Actor {
+  role: string;
+  login: string;
+  password: string;
+  note: string;
+}
+
+async function call<T>(
+  path: string,
+  init: { method: string; token?: string; body?: unknown; form?: FormData },
+): Promise<T> {
+  const headers: Record<string, string> = {};
+  if (init.token) headers.Authorization = `Bearer ${init.token}`;
+  if (init.body !== undefined) headers['Content-Type'] = 'application/json';
+
+  // `/auth/login` is rate-limited to 10/min per IP (auth.controller.ts) — shared across
+  // EVERY login this script makes (super admin, fuel admin, transport admin, client, and
+  // one per seeded driver). `DRIVER_COUNT` beyond a handful pushes total logins past that
+  // limit well within a minute; retrying on 429 with the server's own `Retry-After` is what
+  // makes any `DRIVER_COUNT` reliable instead of picking an arbitrary "safe" ceiling.
+  for (let attempt = 0; ; attempt++) {
+    const res = await fetch(BASE_URL + path, {
+      method: init.method,
+      headers,
+      body: init.form ?? (init.body === undefined ? undefined : JSON.stringify(init.body)),
+    });
+
+    if (res.status === 429 && attempt < 5) {
+      const retryAfterSeconds = Number(res.headers.get('retry-after')) || 15;
+      console.log(`  … rate limited on ${path}, waiting ${retryAfterSeconds}s (attempt ${attempt + 1}/5)`);
+      await new Promise((resolve) => setTimeout(resolve, retryAfterSeconds * 1000));
+      continue;
+    }
+
+    const text = await res.text();
+    const parsed = text ? JSON.parse(text) : null;
+    if (!res.ok) {
+      throw new Error(`${init.method} ${path} → ${res.status}: ${JSON.stringify(parsed)}`);
+    }
+    return parsed as T;
+  }
+}
+
+const login = (credential: Record<string, string>) =>
+  call<{ accessToken: string }>('/auth/login', {
+    method: 'POST',
+    body: { ...credential, password: credential.password ?? PASSWORD },
+  });
+
+/**
+ * Brings a driver genuinely online with a real position — `isOnline` and
+ * `location` are runtime presence state (`presence.service.ts`,
+ * `tracking.gateway.ts`), never fields `CreateUserDto` accepts. Connects to
+ * `/tracking` exactly as the mobile app does, sends one `location:update`
+ * (always accepted for a driver's first-ever point — no prior location to
+ * conflict with), then disconnects; presence itself outlives the socket
+ * (`lastSeenAt`), so the driver stays a genuine `$geoNear` candidate.
+ */
+function connectDriverOnline(token: string, point: { lat: number; lng: number }): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const socket = io(`${SOCKET_URL}/tracking`, { auth: { token }, transports: ['websocket'] });
+    const timeout = setTimeout(() => {
+      socket.disconnect();
+      reject(new Error('driver socket connection timed out'));
+    }, 10_000);
+    socket.on('connect', () => {
+      socket.emit(
+        'location:update',
+        { lat: point.lat, lng: point.lng, recordedAt: new Date().toISOString() },
+        () => {
+          clearTimeout(timeout);
+          socket.disconnect();
+          resolve();
+        },
+      );
+    });
+    socket.on('connect_error', (err) => {
+      clearTimeout(timeout);
+      reject(err);
+    });
+  });
+}
+
+/** Reads a key out of `.env` without pulling in a loader — the gateway secrets
+ *  must match the running server exactly or every webhook 401s. */
+function envFileValue(key: string): string {
+  try {
+    const line = readFileSync(join(__dirname, '..', '.env'), 'utf8')
+      .split('\n')
+      .find((l) => l.startsWith(`${key}=`));
+    return line ? line.slice(key.length + 1).trim() : '';
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Rewrites the Postman environment to match what was just seeded. Every run
+ * mints new emails, so a hand-maintained environment goes stale the moment
+ * anyone re-seeds — regenerating it here is what keeps Postman and the
+ * dashboard testing the *same* accounts. Variable names mirror the collection's
+ * (`companyAdminEmail` is the Fuel Company admin, predating spec 004's rename).
+ */
+function writePostmanEnvironment(actors: {
+  fuelAdminEmail: string;
+  transportAdminEmail: string;
+  clientPhone: string;
+  driverPhone: string;
+}): void {
+  const secret = (value: string) => ({ value, type: 'secret', enabled: true });
+  const plain = (value: string) => ({ value, type: 'default', enabled: true });
+
+  const values = Object.entries({
+    baseUrl: plain(BASE_URL),
+    superAdminEmail: plain(SUPER_ADMIN_EMAIL),
+    superAdminPassword: secret(SUPER_ADMIN_PASSWORD),
+    companyAdminEmail: plain(actors.fuelAdminEmail),
+    companyAdminPassword: secret(PASSWORD),
+    transportAdminEmail: plain(actors.transportAdminEmail),
+    transportAdminPassword: secret(PASSWORD),
+    clientPhone: plain(actors.clientPhone),
+    clientPassword: secret(PASSWORD),
+    driverPhone: plain(actors.driverPhone),
+    driverPassword: secret(PASSWORD),
+    paymentSadadSecret: secret(envFileValue('PAYMENT_SADAD_SECRET')),
+    paymentMadaSecret: secret(envFileValue('PAYMENT_MADA_SECRET')),
+  }).map(([key, rest]) => ({ key, ...rest }));
+
+  const target = join(__dirname, '..', 'postman', 'ciro-fuel-local.postman_environment.json');
+  writeFileSync(
+    target,
+    `${JSON.stringify(
+      {
+        // Stable id/name so re-importing replaces the environment in place
+        // rather than piling up copies.
+        id: 'c1r0-fu3l-4p1-3nv-l0c41-0001',
+        name: 'Ciro Fuel – Local',
+        values,
+        _postman_variable_scope: 'environment',
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  console.log('✔ postman/ciro-fuel-local.postman_environment.json regenerated\n');
+}
+
+async function main(): Promise<void> {
+  const actors: Actor[] = [];
+  console.log(`Seeding dashboard actors against ${BASE_URL} (suffix ${suffix})\n`);
+
+  // 1. CIRO — the only role that may register a Fuel Company.
+  const superAdmin = await login({ email: SUPER_ADMIN_EMAIL, password: SUPER_ADMIN_PASSWORD });
+  console.log('✔ logged in as SUPER_ADMIN');
+  actors.push({
+    role: 'SUPER_ADMIN',
+    login: SUPER_ADMIN_EMAIL,
+    password: SUPER_ADMIN_PASSWORD,
+    note: 'platform operator (pre-existing seed)',
+  });
+
+  // 2. Fuel Company + its admin. Registration is multipart — the commercial
+  //    register file is mandatory (FR-018), so the fixture PDF stands in.
+  const registerPdf = readFileSync(join(__dirname, 'fixtures', 'sample-register.pdf'));
+  const form = new FormData();
+  form.append('name', `Dashboard Fuel Co ${suffix}`);
+  form.append('contactEmail', `contact@${tag('fuel')}.test`);
+  form.append('contactPhone', `+9665${suffix}`);
+  form.append('adminEmail', `fuel@${tag('dash')}.test`);
+  form.append('adminFullName', 'Dashboard Fuel Admin');
+  form.append('adminPhone', `+9665100${suffix.slice(-5)}`);
+  form.append('adminPassword', PASSWORD);
+  form.append(
+    'commercialRegister',
+    new Blob([new Uint8Array(registerPdf)], { type: 'application/pdf' }),
+    'register.pdf',
+  );
+
+  const fuel = await call<{ company: { _id: string }; admin: { email: string } }>('/companies', {
+    method: 'POST',
+    token: superAdmin.accessToken,
+    form,
+  });
+  const fuelCompanyId = fuel.company._id;
+  console.log(`✔ fuel company ${fuelCompanyId}`);
+  actors.push({
+    role: 'FUEL_COMPANY_ADMIN',
+    login: fuel.admin.email,
+    password: PASSWORD,
+    note: 'approves, prices, routes, force-completes',
+  });
+
+  const fuelAdmin = await login({ email: fuel.admin.email });
+
+  // 3. Prices — without them an order has no estimatedPrice to approve against.
+  await call(`/companies/${fuelCompanyId}/fuel-prices`, {
+    method: 'PUT',
+    token: fuelAdmin.accessToken,
+    body: {
+      prices: [
+        { fuelType: 'DIESEL', basePricePerLiter: 2.1 },
+        { fuelType: 'PETROL_91', basePricePerLiter: 2.33 },
+        { fuelType: 'PETROL_95', basePricePerLiter: 2.55 },
+        { fuelType: 'KEROSENE', basePricePerLiter: 1.95 },
+      ],
+    },
+  });
+  console.log('✔ fuel prices set');
+
+  // 4. Transportation Company under that Fuel Company, then its region
+  //    coverage — exactly one transporter serving the region means approval
+  //    routes automatically instead of stalling on a choice (FR-014).
+  const transport = await call<{ company: { _id: string }; admin: { email: string } }>(
+    `/companies/${fuelCompanyId}/transporters`,
+    {
+      method: 'POST',
+      token: fuelAdmin.accessToken,
+      body: {
+        name: `Dashboard Transport Co ${suffix}`,
+        contactEmail: `contact@${tag('transport')}.test`,
+        contactPhone: `+9665200${suffix.slice(-5)}`,
+        adminEmail: `transport@${tag('dash')}.test`,
+        adminFullName: 'Dashboard Transport Admin',
+        adminPhone: `+9665300${suffix.slice(-5)}`,
+        adminPassword: PASSWORD,
+      },
+    },
+  );
+  const transportCompanyId = transport.company._id;
+  console.log(`✔ transport company ${transportCompanyId}`);
+  actors.push({
+    role: 'TRANSPORT_COMPANY_ADMIN',
+    login: transport.admin.email,
+    password: PASSWORD,
+    note: 'assigns drivers, settles DEFERRED invoices',
+  });
+
+  await call(`/companies/${transportCompanyId}/regions`, {
+    method: 'PUT',
+    token: fuelAdmin.accessToken,
+    body: { regionCodes: [REGION_CODE] },
+  });
+  console.log(`✔ transporter serves ${REGION_CODE}`);
+
+  // 5. Client — created by the Fuel Company, stationed in the served region.
+  const clientPhone = `+9665400${suffix.slice(-5)}`;
+  const client = await call<{ _id: string }>('/users', {
+    method: 'POST',
+    token: fuelAdmin.accessToken,
+    body: {
+      role: 'CLIENT',
+      email: `client@${tag('dash')}.test`,
+      password: PASSWORD,
+      fullName: 'Dashboard Client',
+      phone: clientPhone,
+      station: {
+        regionCode: REGION_CODE,
+        governorateCode: GOVERNORATE_CODE,
+        location: STATION_LOCATION,
+        addressText: 'Dashboard test station, Riyadh',
+        name: 'Dashboard Station',
+      },
+    },
+  });
+  console.log('✔ client created');
+  actors.push({
+    role: 'CLIENT',
+    login: clientPhone,
+    password: PASSWORD,
+    note: 'creates orders, reads OTPs — logs in by PHONE',
+  });
+
+  // 5a. spec 005 T129: itemised pricing (FR-011) — without this, /orders/quote
+  // 409s with PRICING_NOT_CONFIGURED and the seeded orders below never happen.
+  await call(`/companies/${fuelCompanyId}/pricing-config`, {
+    method: 'PUT',
+    token: fuelAdmin.accessToken,
+    body: {
+      deliveryFee: 30,
+      serviceFeePercent: 1,
+      taxRatePercent: 15,
+      tankerCapacitiesLiters: [20000, 22000, 32000, 33000, 36000, 42000, 46000],
+    },
+  });
+  console.log('✔ pricing config set');
+
+  // 5b. spec 005 T129/D2: two more stations, so the app's multi-station UI
+  // (favourite, switch) has more than one real row to show — the default
+  // station above already exists from step 5, these are additional.
+  for (const [name, addressText] of [
+    ['Dashboard Station — North', 'Al Olaya, Riyadh'],
+    ['Dashboard Station — East', 'Al Naseem, Riyadh'],
+  ] as const) {
+    await call(`/users/${client._id}/stations`, {
+      method: 'POST',
+      token: fuelAdmin.accessToken,
+      body: {
+        name,
+        regionCode: REGION_CODE,
+        governorateCode: GOVERNORATE_CODE,
+        location: STATION_LOCATION,
+        addressText,
+      },
+    });
+  }
+  console.log('✔ two additional client stations registered');
+
+  // 5b. Feature 009 quickstart.md Part 2 record 8: a warehouse supplying this
+  // order's fuel grades — SUPER_ADMIN-only (FR-035c). Without one,
+  // `DispatchService.assignDriver` refuses every assignment with
+  // NO_WAREHOUSE_FOR_GRADE regardless of how correct the rest of the seed is.
+  await call('/warehouses', {
+    method: 'POST',
+    token: superAdmin.accessToken,
+    body: {
+      name: `Dashboard Warehouse ${suffix}`,
+      location: STATION_LOCATION,
+      addressText: 'Riyadh — seeded warehouse',
+      region: REGION_CODE,
+      governorate: GOVERNORATE_CODE,
+      fuelTypes: ['DIESEL', 'PETROL_91', 'PETROL_95', 'KEROSENE'],
+    },
+  });
+  console.log('✔ warehouse seeded');
+
+  // 6. Drivers — the transporter's own fleet, never the Fuel Company's.
+  // Feature 009 (spec 008 cutover): a vehicle is no longer a field embedded
+  // on the driver. `CreateUserDto` for role DRIVER accepts no `truck` field
+  // at all any more — the previous version of this script sent one and
+  // would 400 on this exact call (`forbidNonWhitelisted: true`). Truck and
+  // tank are now their own records, created and paired separately below.
+  //
+  // `DRIVER_COUNT` drivers, each with their own truck (paired card + qr
+  // token) and own valid tank, so the transport dashboard has real fleet
+  // depth to assign many concurrent orders against — one driver is enough
+  // to prove the wiring, not enough to test assignment across a work queue.
+  // `isOnline`/`location` are runtime presence state, never accepted by
+  // `CreateUserDto` (`DispatchService.findCandidates`'s `$geoNear` silently
+  // omits a driver with no location) — each driver is brought genuinely
+  // online here via a real `/tracking` socket connection and one
+  // `location:update`, the same protocol the mobile app itself uses, spread
+  // a little around Riyadh so the map shows distinct points.
+  const transportAdmin = await login({ email: transport.admin.email });
+  interface SeededDriver {
+    id: string;
+    phone: string;
+    truckId: string;
+    plateNumber: string;
+    tankId: string;
+  }
+  const drivers: SeededDriver[] = [];
+
+  for (let i = 0; i < DRIVER_COUNT; i++) {
+    const driverPhone = `+9665500${suffix.slice(-4)}${i}`;
+    const driverEmail = `driver${i}@${tag('dash')}.test`;
+    const created = await call<{ _id: string }>('/users', {
+      method: 'POST',
+      token: transportAdmin.accessToken,
+      body: {
+        role: 'DRIVER',
+        email: driverEmail,
+        password: PASSWORD,
+        fullName: `Dashboard Driver ${i + 1}`,
+        phone: driverPhone,
+      },
+    });
+
+    const plateNumber = `DSH-${suffix.slice(-4)}-${i}`;
+    const truck = await call<{ id: string }>('/trucks', {
+      method: 'POST',
+      token: transportAdmin.accessToken,
+      body: { plateNumber },
+    });
+    const nfcCardUid = `SEED-CARD-${suffix}-${i}`;
+    await call(`/trucks/${truck.id}/pair-card`, {
+      method: 'POST',
+      token: transportAdmin.accessToken,
+      body: { nfcCardUid },
+    });
+    await call(`/trucks/${truck.id}/qr-token`, { method: 'POST', token: transportAdmin.accessToken });
+
+    const tank = await call<{ id: string }>('/tanks', {
+      method: 'POST',
+      token: transportAdmin.accessToken,
+      body: {
+        code: `TANK-OK-${suffix}-${i}`,
+        material: i % 2 === 0 ? 'ALUMINIUM' : 'IRON',
+        maxCapacityLiters: 30000,
+        fuelTypes: ['DIESEL', 'PETROL_91', 'PETROL_95', 'KEROSENE'],
+      },
+    });
+
+    // Bring the driver genuinely online with a real location — small jitter
+    // per index so drivers don't all land on the exact same point.
+    const driverAuth = await login({ email: driverEmail });
+    await connectDriverOnline(driverAuth.accessToken, {
+      lat: STATION_LOCATION.latitude + (i - DRIVER_COUNT / 2) * 0.01,
+      lng: STATION_LOCATION.longitude + (i - DRIVER_COUNT / 2) * 0.01,
+    });
+
+    drivers.push({ id: created._id, phone: driverPhone, truckId: truck.id, plateNumber, tankId: tank.id });
+    console.log(`✔ driver ${i + 1}/${DRIVER_COUNT} online — truck ${plateNumber}, tank ${tank.id}`);
+    actors.push({
+      role: 'DRIVER',
+      login: driverPhone,
+      password: PASSWORD,
+      note: `delivers — logs in by PHONE — truck ${plateNumber}`,
+    });
+  }
+  const driverPhone = drivers[0].phone;
+  console.log(`✔ ${DRIVER_COUNT} drivers seeded, each online with its own truck + tank\n`);
+
+  // 6b. One deliberately undersized, single-grade tank — matching
+  // quickstart.md Part 2 record 11, the walkthrough's proof that the
+  // assignment guards are real (SC-007). Shared, not per-driver: its only
+  // job is to be chosen once and refused.
+  const undersizedTank = await call<{ id: string }>('/tanks', {
+    method: 'POST',
+    token: transportAdmin.accessToken,
+    body: {
+      code: `TANK-UNDERSIZED-${suffix}`,
+      material: 'IRON',
+      maxCapacityLiters: 5000,
+      fuelTypes: ['DIESEL'],
+    },
+  });
+  console.log(`✔ deliberately undersized tank seeded — ${undersizedTank.id}\n`);
+
+  // 7. spec 005 T129: `ORDER_COUNT` orders on the client's default station, so the
+  // orders list/dashboard have something to page through locally, AND enough of a
+  // work queue to actually test assigning many orders across `DRIVER_COUNT` drivers.
+  // Left in PENDING_APPROVAL — walking each through the full lifecycle here would
+  // duplicate what the e2e suites already cover, and pagination/list UI is this
+  // step's own concern; `scripts/approve-and-route-order.ts` (or its `ALL` mode)
+  // is the real approval/routing step. **DEFERRED, not DIRECT**: a DIRECT order
+  // stops at PENDING_PAYMENT on approval and never reaches the transport admin's
+  // queue at all (FR-020a) — since routing is exactly what this fleet exists to
+  // test, DEFERRED (which routes immediately, no client credit setup required) is
+  // the payment method that actually exercises it.
+  const clientAuth = await login({ email: `client@${tag('dash')}.test` });
+  const ordersFuelTypes = ['DIESEL', 'PETROL_91', 'PETROL_95'] as const;
+  const clientStations = await call<{ items: { _id: string }[] }>('/stations', {
+    method: 'GET',
+    token: clientAuth.accessToken,
+  });
+  const seedStationId = clientStations.items[0]._id;
+  for (let i = 0; i < ORDER_COUNT; i++) {
+    const fuelType = ordersFuelTypes[i % ordersFuelTypes.length];
+    const quote = await call<{ quoteToken: string }>('/orders/quote', {
+      method: 'POST',
+      token: clientAuth.accessToken,
+      body: { fuelType, quantityLiters: 20000, stationId: seedStationId },
+    });
+    await call('/orders', {
+      method: 'POST',
+      token: clientAuth.accessToken,
+      body: {
+        fuelType,
+        quantityLiters: 20000,
+        stationId: seedStationId,
+        quoteToken: quote.quoteToken,
+        paymentMethod: 'DEFERRED',
+      },
+    });
+  }
+  console.log(`✔ ${ORDER_COUNT} orders seeded for the client (DEFERRED — ready to approve+route)\n`);
+
+  writePostmanEnvironment({
+    fuelAdminEmail: fuel.admin.email,
+    transportAdminEmail: transport.admin.email,
+    clientPhone,
+    driverPhone,
+  });
+
+  console.log('Paste these into the dashboard session panel:\n');
+  for (const a of actors) {
+    console.log(`  ${a.role.padEnd(24)} ${a.login.padEnd(34)} ${a.password}`);
+    console.log(`  ${''.padEnd(24)} ${a.note}\n`);
+  }
+  console.log(`Dashboard: ${BASE_URL.replace(/\/api\/v1$/, '')}/dashboard/`);
+}
+
+main().catch((err: Error) => {
+  console.error(`\nSeeding failed: ${err.message}`);
+  process.exit(1);
+});

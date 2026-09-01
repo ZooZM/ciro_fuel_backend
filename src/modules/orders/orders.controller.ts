@@ -15,22 +15,39 @@ import { Throttle } from '@nestjs/throttler';
 import { OrdersService } from './orders.service';
 import { OrderStateService } from './services/order-state.service';
 import { OtpService } from './services/otp.service';
-import { DispatchService } from '../dispatch/services/dispatch.service';
+import { EtaService } from './eta.service';
+import { RouteService } from './route.service';
+import { RoutingService } from '../dispatch/services/routing.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { CreateOrderDto } from './dto/create-order.dto';
 import { ApproveOrderDto } from './dto/approve-order.dto';
 import { RejectOrderDto } from './dto/reject-order.dto';
 import { CancelOrderDto } from './dto/cancel-order.dto';
+import { RouteOrderDto } from './dto/route-order.dto';
 import { VerifyOtpDto } from './dto/verify-otp.dto';
 import { ForceCompleteOrderDto } from './dto/force-complete-order.dto';
+import { SubmitRatingDto } from './dto/submit-rating.dto';
+import { VerifyVehicleDto } from './dto/verify-vehicle.dto';
+import { OverrideVerificationDto } from './dto/override-verification.dto';
+import { ReassignVehicleDto } from './dto/reassign-vehicle.dto';
+import { VehicleVerificationService } from './services/vehicle-verification.service';
+import { RatingsService } from '../ratings/ratings.service';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { OrderStatus } from '../../common/enums/order-status.enum';
+import { VerificationStage } from '../../common/enums/verification-stage.enum';
+import { ErrorCode } from '../../common/enums/error-code.enum';
 import { AuthenticatedUser } from '../../common/interfaces/jwt-payload.interface';
 import { ObjectIdPipe } from '../../common/pipes/object-id.pipe';
-import { OtpPurpose } from './schemas/order.schema';
+import { OrderDocument, OtpPurpose } from './schemas/order.schema';
 import { NotificationType } from '../../common/enums/notification-type.enum';
+import { StationsService } from '../stations/stations.service';
+import { PricingService } from './services/pricing.service';
+import { QuoteOrderDto } from './dto/quote-order.dto';
+import { StopDetectionService } from '../stop-detection/stop-detection.service';
+import { DeclareStopDto } from './dto/declare-stop.dto';
+import { SubmitStopReasonDto } from './dto/submit-stop-reason.dto';
 
 @Controller({ path: 'orders', version: '1' })
 export class OrdersController {
@@ -38,8 +55,15 @@ export class OrdersController {
     private readonly ordersService: OrdersService,
     private readonly orderStateService: OrderStateService,
     private readonly otpService: OtpService,
-    private readonly dispatchService: DispatchService,
+    private readonly routingService: RoutingService,
     private readonly notificationsService: NotificationsService,
+    private readonly etaService: EtaService,
+    private readonly routeService: RouteService,
+    private readonly stationsService: StationsService,
+    private readonly pricingService: PricingService,
+    private readonly ratingsService: RatingsService,
+    private readonly vehicleVerificationService: VehicleVerificationService,
+    private readonly stopDetectionService: StopDetectionService,
   ) {}
 
   @Roles(UserRole.CLIENT)
@@ -48,17 +72,190 @@ export class OrdersController {
     return this.ordersService.create(user, dto);
   }
 
+  /**
+   * spec 005 US2/T054. A CLIENT's own `companyId` is their fuel company
+   * (spec 004's tenancy model), so no separate lookup is needed to know
+   * whose pricing to quote from. `stationId` must be the caller's own —
+   * `findOwnedByClient` 404s otherwise, never revealing whether some other
+   * client's station exists.
+   */
+  @Roles(UserRole.CLIENT)
+  @Post('quote')
+  async quote(@CurrentUser() user: AuthenticatedUser, @Body() dto: QuoteOrderDto) {
+    await this.stationsService.findOwnedByClient(dto.stationId, user.userId);
+    return this.pricingService.quote(user.companyId!, dto.fuelType, dto.quantityLiters);
+  }
+
+  /**
+   * Feature 009 FR-059-061/FR-067: the transport dashboard's whole overview in one
+   * request. Restricted to TRANSPORT_COMPANY_ADMIN/SUPER_ADMIN, not the wider set
+   * originally sketched in planning — `driversOnDuty` and `awaitingAssignment`
+   * (ROUTED_TO_TRANSPORT) are transporter-specific concepts with no meaningful
+   * equivalent for a fuel company, which has no consumer of this endpoint in this
+   * feature. `from`/`to` default to the current month when omitted; both are read as
+   * whole-day boundaries.
+   */
+  @Roles(UserRole.TRANSPORT_COMPANY_ADMIN, UserRole.SUPER_ADMIN)
+  @Get('summary')
+  async summary(@Query('from') from?: string, @Query('to') to?: string) {
+    const now = new Date();
+    const start = from ? new Date(from) : new Date(now.getFullYear(), now.getMonth(), 1);
+    const end = to ? new Date(to) : now;
+    return this.ordersService.getSummary(start, end);
+  }
+
   @Get()
-  findMine(@CurrentUser() user: AuthenticatedUser, @Query('status') status?: OrderStatus) {
-    return this.ordersService.findForUser(user, { status });
+  async findMine(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('status') status?: OrderStatus,
+    @Query('cursor') cursor?: string,
+  ) {
+    const page = await this.ordersService.findForUser(user, { status, cursor });
+    // One query for the whole page's stations, so a list row can name the
+    // destination. Without it a client whose order was placed before their
+    // station had an address on file sees raw coordinates in the list —
+    // `deliveryAddressText` is snapshotted at creation and stays empty.
+    const stations = await this.stationsService.findManyIncludingInactive(
+      page.items.map((order) => (order.stationId ? String(order.stationId) : undefined)),
+    );
+    const items = await Promise.all(
+      page.items.map(async (order) => ({
+        // Same role-scoped shape the detail endpoint returns (FR-042) — a
+        // list that spread the raw document would hand a customer the
+        // verification trail through a second door.
+        ...this.toRoleScopedShape(order, user),
+        etaMinutes: await this.etaService.computeEtaMinutes(order),
+        station: order.stationId ? (stations.get(String(order.stationId)) ?? null) : null,
+      })),
+    );
+    return { items, nextCursor: page.nextCursor };
+  }
+
+  /**
+   * spec 008 FR-039/FR-041/FR-042: the verification history and the tank's
+   * identity are operator/driver-facing only — a customer never sees
+   * either, so they are stripped before the spread rather than filtered in.
+   *
+   * Shared by `findOne` AND `findMine` deliberately. Applying it in only
+   * one of them is not a smaller leak, it is the same leak: a customer's
+   * order list returns the very same documents, so a rule that lives at one
+   * endpoint is a rule the next endpoint silently does not have. Any future
+   * order-returning route for a customer belongs here too.
+   */
+  private toRoleScopedShape(
+    order: OrderDocument,
+    user: AuthenticatedUser,
+  ): Record<string, unknown> {
+    const isOperatorOrDriver =
+      user.role === UserRole.DRIVER ||
+      user.role === UserRole.FUEL_COMPANY_ADMIN ||
+      user.role === UserRole.TRANSPORT_COMPANY_ADMIN ||
+      user.role === UserRole.SUPER_ADMIN;
+    const base = order.toObject() as Record<string, unknown>;
+    if (!isOperatorOrDriver) {
+      delete base.verifications;
+      delete base.tankSummary;
+      // spec 010: acknowledgment/escalation state and the ineligible-
+      // assignment reason are operator/driver-facing only — the same class
+      // of internal-dispatch detail `verifications`/`tankSummary` already
+      // strip here, never shown to the CLIENT who placed the order.
+      delete base.assignmentAcknowledgedAt;
+      delete base.assignmentEscalationSmsAt;
+      delete base.assignmentEscalationSkippedReason;
+      delete base.assignedWhileIneligible;
+      delete base.assignedWhileIneligibleReason;
+      // spec 011: a customer has no business reading why their driver
+      // stopped, or where they were when they did. This is a privacy
+      // boundary, not merely scoping — the feature is deliberately framed
+      // as safety and delivery visibility for the transporter who employs
+      // the driver, and widening the audience would change what it is.
+      delete base.stopEvents;
+    }
+    return base;
   }
 
   @Get(':id')
-  findOne(@CurrentUser() user: AuthenticatedUser, @Param('id', ObjectIdPipe) id: string) {
-    return this.ordersService.findOneForUser(user, id);
+  async findOne(@CurrentUser() user: AuthenticatedUser, @Param('id', ObjectIdPipe) id: string) {
+    const order = await this.ordersService.findOneForUser(user, id);
+    const station = await this.stationsService.findByIdIncludingInactive(
+      order.stationId ? String(order.stationId) : undefined,
+    );
+    // `driverLocation` lets the tracking map draw the truck the moment the
+    // screen opens, instead of staying blank until the driver's next
+    // throttled `location:update` arrives over the socket (spec 005).
+    const { etaMinutes, driverLocation, driverLocationAt } =
+      await this.etaService.driverTelemetry(order);
+    // spec 007 FR-037d/FR-041: both personas read the rating off the
+    // delivery it belongs to — absent until one exists, never a placeholder.
+    const rating = await this.ratingsService.findByOrderId(String(order._id));
+
+    const base = this.toRoleScopedShape(order, user);
+
+    return {
+      ...base,
+      etaMinutes,
+      driverLocation,
+      // spec 011 FR-017a: how old that fix is. The dashboard cannot present a
+      // position as stale without knowing its age, and a frozen dot with no
+      // age reads exactly like a live one.
+      driverLocationAt,
+      station,
+      // FR-047d/FR-038: an overridden stage writes no VehicleVerification
+      // record at all (research R10) — so this reads as "not verified"
+      // automatically, with no separate override flag needed to stay honest.
+      vehicleVerified: order.verifications.some(
+        (v) => v.stage === VerificationStage.DEPARTURE && v.matched,
+      ),
+      ...(rating ? { rating: { score: rating.score, review: rating.review ?? null } } : {}),
+    };
   }
 
-  @Roles(UserRole.COMPANY_ADMIN)
+  /**
+   * The road-following route from the assigned driver to the delivery
+   * destination, for the client's tracking map.
+   *
+   * A separate call rather than a field on `GET /orders/:id`: it is an
+   * outbound, billed request to Google, and the order read happens far more
+   * often than the route meaningfully changes. The client refetches only
+   * when the truck has moved enough to matter.
+   *
+   * `{ route: null }` — never an error — whenever no driver is assigned,
+   * the driver has no position yet, or Directions is unavailable. The map
+   * falls back to a direct line, which is honest about being an
+   * approximation rather than a driven path.
+   *
+   * Named `driving-route` rather than `route`: `PATCH :id/route` already
+   * means "assign this order to a transporter", and one path meaning two
+   * unrelated things is how the wrong one gets called.
+   */
+  @Roles(UserRole.CLIENT)
+  @Get(':id/driving-route')
+  async drivingRoute(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ObjectIdPipe) id: string,
+  ) {
+    const order = await this.ordersService.findOneForUser(user, id);
+    const { driverLocation } = await this.etaService.driverTelemetry(order);
+    if (!driverLocation) {
+      return { route: null };
+    }
+    const route = await this.routeService.drivingRoute(driverLocation, order.deliveryLocation);
+    return { route: route ?? null };
+  }
+
+  /**
+   * Sets the final price (PENDING_APPROVAL -> APPROVED) and issues the
+   * order's invoice (spec 004 FR-020, `OrdersService.approve`). A DIRECT
+   * order stops at PENDING_PAYMENT — FR-020a forbids routing it before
+   * settlement, so routing resumes later from the payment webhook. A
+   * DEFERRED/CREDIT order routes immediately, exactly as approval always
+   * did before billing existed (FR-014/015/016): exactly one serving
+   * transporter routes automatically; none or several-without-a-choice
+   * leaves the order AWAITING_ROUTING with `routingCandidates` in the
+   * response for a follow-up `PATCH :id/route` call; several with
+   * `dto.transportCompanyId` routes immediately to that choice.
+   */
+  @Roles(UserRole.FUEL_COMPANY_ADMIN)
   @Patch(':id/approve')
   async approve(
     @CurrentUser() user: AuthenticatedUser,
@@ -66,29 +263,67 @@ export class OrdersController {
     @Body() dto: ApproveOrderDto,
   ) {
     const order = await this.ordersService.findById(id);
-    const finalPrice = dto.finalPrice ?? order.estimatedPrice;
+    const actor = { actorId: user.userId, actorRole: user.role };
 
-    const updated = await this.orderStateService.transition(
-      id,
-      OrderStatus.PENDING_APPROVAL,
-      OrderStatus.APPROVED,
-      { actorId: user.userId, actorRole: user.role },
-      { extraSet: { finalPrice, approvedBy: user.userId } },
-    );
+    const approved = await this.ordersService.approve(order, actor, dto);
 
     await this.notificationsService.notify({
-      companyId: updated.companyId,
-      recipientUserId: updated.clientId,
+      companyId: approved.fuelCompanyId,
+      recipientUserId: approved.clientId,
       type: NotificationType.ORDER_APPROVED_FINAL_PRICE,
-      orderId: updated._id as never,
-      payload: { finalPrice },
+      orderId: approved._id as never,
+      payload: { finalPrice: approved.finalPrice },
     });
 
-    await this.dispatchService.assignDriver(id);
-    return this.ordersService.findById(id);
+    if (approved.status === OrderStatus.PENDING_PAYMENT) {
+      return approved.toObject();
+    }
+
+    const { order: routed, candidates } = await this.routingService.routeOrder(
+      approved,
+      actor,
+      OrderStatus.APPROVED,
+      dto.transportCompanyId,
+    );
+    return {
+      ...routed.toObject(),
+      ...(candidates.length > 1
+        ? { routingCandidates: candidates.map((c) => ({ id: c._id, name: c.name })) }
+        : {}),
+    };
   }
 
-  @Roles(UserRole.COMPANY_ADMIN)
+  /**
+   * Resolves an AWAITING_ROUTING order manually (spec 004 FR-014's "the
+   * Fuel Company must choose" — also the only way forward after FR-016's
+   * "no transporter serves the region" once one is later assigned coverage).
+   */
+  @Roles(UserRole.FUEL_COMPANY_ADMIN)
+  @Patch(':id/route')
+  async route(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ObjectIdPipe) id: string,
+    @Body() dto: RouteOrderDto,
+  ) {
+    const order = await this.ordersService.findById(id);
+    if (order.status !== OrderStatus.AWAITING_ROUTING) {
+      throw new ConflictException('Order must be AWAITING_ROUTING to route it manually');
+    }
+    const { order: routed } = await this.routingService.routeOrder(
+      order,
+      { actorId: user.userId, actorRole: user.role },
+      OrderStatus.AWAITING_ROUTING,
+      dto.transportCompanyId,
+    );
+    if (routed.status !== OrderStatus.ROUTED_TO_TRANSPORT) {
+      throw new BadRequestException(
+        'transportCompanyId is not one of the transporters serving this region',
+      );
+    }
+    return routed;
+  }
+
+  @Roles(UserRole.FUEL_COMPANY_ADMIN)
   @Patch(':id/reject')
   reject(
     @CurrentUser() user: AuthenticatedUser,
@@ -112,31 +347,40 @@ export class OrdersController {
   ) {
     const order = await this.ordersService.findOneForUser(user, id);
     const isClient = user.role === UserRole.CLIENT && String(order.clientId) === user.userId;
-    const isAdmin = user.role === UserRole.COMPANY_ADMIN;
+    const isAdmin = user.role === UserRole.FUEL_COMPANY_ADMIN;
 
     if (!isClient && !isAdmin) {
       throw new ForbiddenException('Not permitted to cancel this order');
     }
 
+    // AWAITING_ROUTING/ROUTED_TO_TRANSPORT are pre-driver-assignment states,
+    // same cancellation rights as bare APPROVED (spec 004 FR-014/FR-016).
+    const CLIENT_CANCELLABLE = [
+      OrderStatus.PENDING_APPROVAL,
+      OrderStatus.APPROVED,
+      OrderStatus.AWAITING_ROUTING,
+      OrderStatus.ROUTED_TO_TRANSPORT,
+      OrderStatus.PENDING_PAYMENT,
+    ];
+    // spec 008 FR-046d: LOADING joins ASSIGNED_TO_DRIVER as admin-only —
+    // the truck hasn't left the depot yet, but a client is never the one
+    // to call that off once a driver is already in motion toward it.
+    const ADMIN_CANCELLABLE = [
+      ...CLIENT_CANCELLABLE,
+      OrderStatus.ASSIGNED_TO_DRIVER,
+      OrderStatus.LOADING,
+    ];
+
     let from: OrderStatus;
     if (isClient) {
       // Clients may cancel pre-assignment, or decline the final price while
       // awaiting payment (FR-009); anything else is admin-only.
-      if (
-        order.status !== OrderStatus.PENDING_APPROVAL &&
-        order.status !== OrderStatus.APPROVED &&
-        order.status !== OrderStatus.PENDING_PAYMENT
-      ) {
+      if (!CLIENT_CANCELLABLE.includes(order.status)) {
         throw new ForbiddenException('Clients may not cancel an order at this stage');
       }
       from = order.status;
     } else {
-      if (
-        order.status !== OrderStatus.PENDING_APPROVAL &&
-        order.status !== OrderStatus.APPROVED &&
-        order.status !== OrderStatus.ASSIGNED_TO_DRIVER &&
-        order.status !== OrderStatus.PENDING_PAYMENT
-      ) {
+      if (!ADMIN_CANCELLABLE.includes(order.status)) {
         throw new ForbiddenException('This order can no longer be cancelled');
       }
       from = order.status;
@@ -150,7 +394,15 @@ export class OrdersController {
     );
   }
 
-  @Roles(UserRole.COMPANY_ADMIN, UserRole.CLIENT)
+  /**
+   * Post-payment-timeout retry (FR-015a). A timeout reverts a DIRECT order
+   * to bare APPROVED (payment-timeout.processor.ts) — this status is
+   * reached only that way, since DEFERRED/CREDIT orders never expire
+   * (FR-020b). This re-opens a fresh payment window
+   * (`OrdersService.reopenPaymentWindow`); routing itself only resumes once
+   * that window is paid, exactly like the original approval.
+   */
+  @Roles(UserRole.FUEL_COMPANY_ADMIN, UserRole.CLIENT)
   @Post(':id/redispatch')
   async redispatch(@CurrentUser() user: AuthenticatedUser, @Param('id', ObjectIdPipe) id: string) {
     const order = await this.ordersService.findOneForUser(user, id);
@@ -162,7 +414,135 @@ export class OrdersController {
         'Two consecutive payment timeouts occurred — only the Company Admin may redispatch now',
       );
     }
-    return this.dispatchService.assignDriver(id);
+    return this.ordersService.reopenPaymentWindow(order, {
+      actorId: user.userId,
+      actorRole: user.role,
+    });
+  }
+
+  /**
+   * spec 008 US3 (FR-017/FR-020/FR-023): a delivery cannot begin, and
+   * cannot progress past loading, without this. Stage is derived
+   * server-side from the order's own status (research R7) — never accepted
+   * from the client — so the same endpoint serves both the departure
+   * verification and the loading-stage re-verification (FR-030). The two
+   * are not the same check: the loading attempt is additionally geofenced
+   * against the assigned warehouse (FR-030a), which is why `driverLocation`
+   * is on the DTO and why this route can answer NOT_AT_WAREHOUSE.
+   */
+  @Roles(UserRole.DRIVER)
+  @Throttle({ default: { limit: 5, ttl: 15 * 60_000 } })
+  @Post(':id/verify-vehicle')
+  async verifyVehicle(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ObjectIdPipe) id: string,
+    @Body() dto: VerifyVehicleDto,
+  ) {
+    const result = await this.vehicleVerificationService.verify(
+      id,
+      { actorId: user.userId, actorRole: user.role },
+      dto.credential,
+      dto.method,
+      dto.driverLocation,
+    );
+    // FR-026: a successful DEPARTURE verification's next destination is the
+    // warehouse, not the customer — returned here so the driver's app can
+    // route there immediately without a second read.
+    return {
+      status: result.stage,
+      order: result.order,
+      ...(result.stage === VerificationStage.DEPARTURE
+        ? { warehouseSummary: result.order.warehouseSummary ?? null }
+        : { distanceMeters: result.distanceMeters }),
+    };
+  }
+
+  /**
+   * spec 008 US4 (FR-028/FR-031/FR-032): a plain state transition, no
+   * quantity anywhere on this DTO or this method — the authoritative volume
+   * arrives later via the Aramco invoice, a separate feature entirely.
+   */
+  @Roles(UserRole.DRIVER)
+  @Post(':id/confirm-loading')
+  async confirmLoading(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ObjectIdPipe) id: string,
+  ) {
+    const order = await this.assertDriverAssigned(user, id, OrderStatus.LOADING);
+    const loadingVerified = order.verifications.some(
+      (v) => v.stage === VerificationStage.LOADING && v.matched,
+    );
+    if (!loadingVerified) {
+      throw new ConflictException({
+        error: ErrorCode.VEHICLE_NOT_VERIFIED,
+        message: 'Loading must be verified before it can be confirmed',
+      });
+    }
+    const at = new Date();
+    return this.orderStateService.transition(
+      id,
+      OrderStatus.LOADING,
+      OrderStatus.IN_TRANSIT,
+      { actorId: user.userId, actorRole: user.role },
+      { extraSet: { loadingConfirmedAt: at } },
+    );
+  }
+
+  /**
+   * spec 008 US3 (FR-047): the operator's explicit, reasoned attestation —
+   * reuses `OrderStateService.transition`'s existing `manualOverride`/
+   * `overrideReason` machinery (research R10), which already writes the
+   * reason, actor and timestamp into `statusHistory`. Deliberately writes
+   * **no** `VehicleVerification` record — that omission is what makes
+   * "overridden" structurally distinct from "verified" (FR-047c/FR-047d),
+   * not a naming convention. Advances exactly the one outstanding stage;
+   * FR-047g — a stage that has not been reached yet is refused, same as a
+   * genuine verification attempt would be (FR-025).
+   */
+  @Roles(UserRole.TRANSPORT_COMPANY_ADMIN)
+  @Post(':id/override-verification')
+  async overrideVerification(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ObjectIdPipe) id: string,
+    @Body() dto: OverrideVerificationDto,
+  ) {
+    // Scoped by the multi-party plugin to the acting admin's own
+    // transportCompanyId (FR-047e) — another company's order is a 404 here,
+    // same as every other cross-tenant id in this controller.
+    const order = await this.ordersService.findById(id);
+    const actor = { actorId: user.userId, actorRole: user.role };
+
+    if (order.status === OrderStatus.ASSIGNED_TO_DRIVER) {
+      return this.orderStateService.transition(
+        id,
+        OrderStatus.ASSIGNED_TO_DRIVER,
+        OrderStatus.LOADING,
+        actor,
+        { manualOverride: true, overrideReason: dto.reason },
+      );
+    }
+    if (order.status === OrderStatus.LOADING) {
+      return this.orderStateService.transition(
+        id,
+        OrderStatus.LOADING,
+        OrderStatus.IN_TRANSIT,
+        actor,
+        {
+          manualOverride: true,
+          overrideReason: dto.reason,
+          extraSet: { loadingConfirmedAt: new Date() },
+        },
+      );
+    }
+    throw new ConflictException('No verification stage is currently outstanding on this order');
+  }
+
+  /** spec 008 FR-015: pre-departure correction — scoped to the acting transporter's own orders. */
+  @Roles(UserRole.TRANSPORT_COMPANY_ADMIN)
+  @Patch(':id/reassign-vehicle')
+  async reassignVehicle(@Param('id', ObjectIdPipe) id: string, @Body() dto: ReassignVehicleDto) {
+    const order = await this.ordersService.findById(id);
+    return this.ordersService.reassignVehicle(order, dto.truckId, dto.tankId);
   }
 
   @Roles(UserRole.DRIVER)
@@ -171,13 +551,95 @@ export class OrdersController {
     const order = await this.assertDriverAssigned(user, id, OrderStatus.IN_TRANSIT);
     await this.otpService.issue(String(order._id), OtpPurpose.ARRIVAL);
     await this.notificationsService.notify({
-      companyId: order.companyId,
+      companyId: order.fuelCompanyId,
       recipientUserId: order.clientId,
       type: NotificationType.OTP_ISSUED,
       orderId: order._id as never,
       payload: { purpose: OtpPurpose.ARRIVAL },
     });
     return { status: 'ARRIVAL_OTP_ISSUED' };
+  }
+
+  /**
+   * spec 010 FR-010/FR-014a: the explicit driver-side acknowledgment signal
+   * — deliberately not `assertDriverAssigned` (which pins one specific
+   * status): the driver's active-delivery screen can load this order at
+   * ASSIGNED_TO_DRIVER, LOADING, or later, and acknowledgment applies at
+   * any of them. Idempotent (contracts/rest-api-delta.md §3) — a second
+   * call is a no-op, not an error.
+   */
+  @Roles(UserRole.DRIVER)
+  @Post(':id/acknowledge-assignment')
+  async acknowledgeAssignment(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ObjectIdPipe) id: string,
+  ) {
+    const order = await this.ordersService.findById(id);
+    if (String(order.driverId) !== user.userId) {
+      // FR-069 discipline: cross-tenant/not-owned is indistinguishable from absent.
+      throw new NotFoundException('Order not found');
+    }
+    const updated = await this.ordersService.acknowledgeAssignment(order);
+    return this.toRoleScopedShape(updated, user);
+  }
+
+  /**
+   * spec 011 FR-008a-d (contracts/rest-api-delta.md §1): the driver announces
+   * a stop before the platform has to ask. Ownership, the IN_TRANSIT
+   * requirement and the one-open-stop invariant are all enforced inside the
+   * service's conditional write rather than by a guard here, so a declaration
+   * racing the detection sweep cannot leave the delivery with two open stops.
+   */
+  @Roles(UserRole.DRIVER)
+  @Post(':id/stops/declare')
+  async declareStop(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ObjectIdPipe) id: string,
+    @Body() dto: DeclareStopDto,
+  ) {
+    const order = await this.stopDetectionService.declareStop(id, user.userId, dto);
+    return this.toRoleScopedShape(order, user);
+  }
+
+  /**
+   * spec 011 FR-007/FR-010: the driver explains a detected stop.
+   *
+   * An answer arriving after the response window already escalated is an
+   * ordinary success here, not a conflict — see `submitReason`'s own comment.
+   */
+  @Roles(UserRole.DRIVER)
+  @Post(':id/stops/:stopId/reason')
+  async submitStopReason(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ObjectIdPipe) id: string,
+    @Param('stopId', ObjectIdPipe) stopId: string,
+    @Body() dto: SubmitStopReasonDto,
+  ) {
+    const order = await this.stopDetectionService.submitReason(id, user.userId, stopId, dto);
+    return this.toRoleScopedShape(order, user);
+  }
+
+  /**
+   * spec 011 FR-011/FR-012: the transport administrator marks a stop handled.
+   *
+   * `findOneForUser` first, so the multi-party scoping plugin decides whether
+   * this administrator can see the order at all — a stop on another
+   * transporter's delivery must 404 exactly as the order itself would.
+   */
+  @Roles(UserRole.TRANSPORT_COMPANY_ADMIN)
+  @Patch(':id/stops/:stopId/resolve')
+  async resolveStop(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ObjectIdPipe) id: string,
+    @Param('stopId', ObjectIdPipe) stopId: string,
+  ) {
+    const order = await this.ordersService.findOneForUser(user, id);
+    const resolved = await this.stopDetectionService.resolveByAdmin(
+      String(order._id),
+      stopId,
+      user.userId,
+    );
+    return this.toRoleScopedShape(resolved, user);
   }
 
   @Roles(UserRole.CLIENT)
@@ -221,7 +683,7 @@ export class OrdersController {
     const order = await this.assertDriverAssigned(user, id, OrderStatus.UNLOADING);
     await this.otpService.issue(String(order._id), OtpPurpose.DELIVERY);
     await this.notificationsService.notify({
-      companyId: order.companyId,
+      companyId: order.fuelCompanyId,
       recipientUserId: order.clientId,
       type: NotificationType.OTP_ISSUED,
       orderId: order._id as never,
@@ -246,7 +708,26 @@ export class OrdersController {
     });
   }
 
-  @Roles(UserRole.COMPANY_ADMIN)
+  /**
+   * spec 007 US6 (FR-037/FR-040): a customer rates the driver who delivered
+   * to them, from the order's own detail — no new screen, no automatic
+   * prompt (FR-037c). `findOneForUser` gives the 404-not-409 ownership
+   * check (Principle II); `RatingsService` enforces DELIVERED-only and
+   * rate-once (ALREADY_RATED/ORDER_NOT_DELIVERED) itself.
+   */
+  @Roles(UserRole.CLIENT)
+  @Post(':id/rating')
+  async submitRating(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ObjectIdPipe) id: string,
+    @Body() dto: SubmitRatingDto,
+  ) {
+    const order = await this.ordersService.findOneForUser(user, id);
+    const rating = await this.ratingsService.submitRating(order, user.userId, dto);
+    return { score: rating.score, review: rating.review ?? null };
+  }
+
+  @Roles(UserRole.FUEL_COMPANY_ADMIN)
   @Patch(':id/force-complete')
   async forceComplete(
     @CurrentUser() user: AuthenticatedUser,
@@ -254,8 +735,18 @@ export class OrdersController {
     @Body() dto: ForceCompleteOrderDto,
   ) {
     const order = await this.ordersService.findById(id);
-    if (order.status !== OrderStatus.IN_TRANSIT && order.status !== OrderStatus.UNLOADING) {
-      throw new ConflictException('Force-complete only allowed from IN_TRANSIT or UNLOADING');
+    // spec 008 FR-046e: LOADING gained its own force-complete edge, mirroring
+    // IN_TRANSIT's — an operator can still short-circuit a delivery stuck at
+    // the depot (e.g. a failed loading confirmation) exactly as they already
+    // could from further along the flow.
+    if (
+      order.status !== OrderStatus.LOADING &&
+      order.status !== OrderStatus.IN_TRANSIT &&
+      order.status !== OrderStatus.UNLOADING
+    ) {
+      throw new ConflictException(
+        'Force-complete only allowed from LOADING, IN_TRANSIT or UNLOADING',
+      );
     }
     return this.ordersService.forceComplete(
       order,

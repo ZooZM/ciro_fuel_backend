@@ -12,6 +12,10 @@
     "outDir": "./dist",
     "baseUrl": "./",
     "incremental": true,
+    // Inside outDir on purpose: nest-cli's `deleteOutDir` wipes dist/, and a
+    // build cache surviving outside it would report the deleted output as
+    // already emitted — leaving `dist/server.js` missing on the next start.
+    "tsBuildInfoFile": "./dist/.tsbuildinfo",
     "skipLibCheck": true,
     "strictNullChecks": true,
     "noImplicitAny": true,

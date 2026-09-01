@@ -1,7 +1,7 @@
 import request from 'supertest';
 import { INestApplication } from '@nestjs/common';
 import { createTestApp, TestAppContext } from '../utils/test-app.factory';
-import { seedTwoCompanies, TwoCompanyFixture } from '../utils/fixtures';
+import { DEFAULT_WAREHOUSE_LOCATION, seedTwoCompanies, TwoCompanyFixture } from '../utils/fixtures';
 import { CompaniesService } from '../../src/modules/companies/companies.service';
 import { OrderStatus } from '../../src/common/enums/order-status.enum';
 
@@ -70,25 +70,82 @@ describe('Platform & company onboarding (US5)', () => {
         password: 'Password123!',
         fullName: 'Onboard Client',
         phone: '+966500000002',
-        stationLocation: { longitude: 46.6753, latitude: 24.7136 },
+        station: {
+          regionCode: 'RIYADH',
+          governorateCode: 'RIYADH_CITY',
+          location: { longitude: 46.6753, latitude: 24.7136 },
+        },
       })
       .expect(201);
     expect(clientRes.body.role).toBe('CLIENT');
 
-    // 5. Admin creates a DRIVER with a truck.
+    // 5. Fuel admin creates a Transportation Company serving the client's
+    // region (spec 004 US2) — only that transporter's own admin may create
+    // DRIVER accounts (FR-004a's symmetric counterpart).
+    const transporterRes = await request(server)
+      .post(`/api/v1/companies/${companyId}/transporters`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        name: 'Onboard Transport Co',
+        contactEmail: 'transport@onboardtest.test',
+        contactPhone: '+966500000005',
+        adminEmail: 'transportadmin@onboardtest.test',
+        adminFullName: 'Onboard Transport Admin',
+        adminPhone: '+966500000004',
+        adminPassword: 'Password123!',
+      })
+      .expect(201);
+    const transportCompanyId = transporterRes.body.company._id;
+
+    await request(server)
+      .put(`/api/v1/companies/${transportCompanyId}/regions`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ regionCodes: ['RIYADH'] })
+      .expect(200);
+
+    const transportAdminLogin = await request(server)
+      .post('/api/v1/auth/login')
+      .send({ email: 'transportadmin@onboardtest.test', password: 'Password123!' })
+      .expect(201);
+    const transportAdminToken = transportAdminLogin.body.accessToken;
+
     const driverRes = await request(server)
       .post('/api/v1/users')
-      .set('Authorization', `Bearer ${adminToken}`)
+      .set('Authorization', `Bearer ${transportAdminToken}`)
       .send({
         role: 'DRIVER',
         email: 'driver@onboardtest.test',
         password: 'Password123!',
         fullName: 'Onboard Driver',
         phone: '+966500000003',
-        truck: { plateNumber: 'ONB-1', maxCapacityLiters: 5000, fuelTypes: ['DIESEL'] },
       })
       .expect(201);
     expect(driverRes.body.role).toBe('DRIVER');
+
+    // spec 008 (research R12): a vehicle is now the transporter's own
+    // Truck/Tank pair, registered separately and NFC-paired, not embedded
+    // on the driver — this is what onboarding a fleet actually looks like.
+    const truckRes = await request(server)
+      .post('/api/v1/trucks')
+      .set('Authorization', `Bearer ${transportAdminToken}`)
+      .send({ plateNumber: 'ONB-1' })
+      .expect(201);
+    const cardUid = 'ONB-CARD-1';
+    await request(server)
+      .post(`/api/v1/trucks/${truckRes.body.id}/pair-card`)
+      .set('Authorization', `Bearer ${transportAdminToken}`)
+      .send({ nfcCardUid: cardUid })
+      .expect(201);
+    const tankRes = await request(server)
+      .post('/api/v1/tanks')
+      .set('Authorization', `Bearer ${transportAdminToken}`)
+      .send({
+        code: 'ONB-TANK-1',
+        material: 'ALUMINIUM',
+        maxCapacityLiters: 5000,
+        fuelTypes: ['DIESEL'],
+      })
+      .expect(201);
 
     // New driver starts inactive-for-dispatch (isOnline: false) until they
     // connect to tracking — mark them online directly to prove eligibility
@@ -100,6 +157,11 @@ describe('Platform & company onboarding (US5)', () => {
       { _id: driverRes.body._id },
       { $set: { isOnline: true, location: { type: 'Point', coordinates: [46.6753, 24.7136] } } },
     );
+    const driverLogin = await request(server)
+      .post('/api/v1/auth/login')
+      .send({ email: 'driver@onboardtest.test', password: 'Password123!' })
+      .expect(201);
+    const driverToken = driverLogin.body.accessToken;
 
     // 6. New client logs in, orders, gets approved, and dispatch reaches the new driver.
     const clientLogin = await request(server)
@@ -107,10 +169,12 @@ describe('Platform & company onboarding (US5)', () => {
       .send({ email: 'client@onboardtest.test', password: 'Password123!' })
       .expect(201);
 
+    // DEFERRED skips the billing gate (spec 004 US5) — this test is about
+    // onboarding/dispatch reachability, not payment methods.
     const orderRes = await request(server)
       .post('/api/v1/orders')
       .set('Authorization', `Bearer ${clientLogin.body.accessToken}`)
-      .send({ fuelType: 'DIESEL', quantityLiters: 500 })
+      .send({ fuelType: 'DIESEL', quantityLiters: 500, paymentMethod: 'DEFERRED' })
       .expect(201);
     expect(orderRes.body.estimatedPrice).toBeCloseTo(3.0 * 500, 2);
 
@@ -119,8 +183,48 @@ describe('Platform & company onboarding (US5)', () => {
       .set('Authorization', `Bearer ${adminToken}`)
       .send({})
       .expect(200);
-    expect(approveRes.body.status).toBe(OrderStatus.PENDING_PAYMENT);
-    expect(approveRes.body.driverId).toBe(driverRes.body._id);
+    expect(approveRes.body.status).toBe(OrderStatus.ROUTED_TO_TRANSPORT);
+    expect(approveRes.body.transportCompanyId).toBe(transportCompanyId);
+
+    // The new transporter sees the new driver among their candidates and
+    // assigns them, their truck and their tank (spec 004 FR-017/FR-018,
+    // spec 008 FR-009).
+    const assignRes = await request(server)
+      .post(`/api/v1/dispatch/orders/${orderRes.body._id}/assign`)
+      .set('Authorization', `Bearer ${transportAdminToken}`)
+      .send({ driverId: driverRes.body._id, truckId: truckRes.body.id, tankId: tankRes.body._id })
+      .expect(201);
+    expect(assignRes.body.assigned).toBe(true);
+    expect(assignRes.body.driverId).toBe(driverRes.body._id);
+
+    // Departure verification then loading confirmation (spec 008 US3/US4)
+    // — the same reachability proof, carried one stage further.
+    await request(server)
+      .post(`/api/v1/orders/${orderRes.body._id}/verify-vehicle`)
+      .set('Authorization', `Bearer ${driverToken}`)
+      .send({ credential: cardUid, method: 'NFC_CARD' })
+      .expect(201);
+    // The second read is at the depot, and is checked against it (FR-030a).
+    await request(server)
+      .post(`/api/v1/orders/${orderRes.body._id}/verify-vehicle`)
+      .set('Authorization', `Bearer ${driverToken}`)
+      .send({
+        credential: cardUid,
+        method: 'NFC_CARD',
+        driverLocation: DEFAULT_WAREHOUSE_LOCATION,
+      })
+      .expect(201);
+    await request(server)
+      .post(`/api/v1/orders/${orderRes.body._id}/confirm-loading`)
+      .set('Authorization', `Bearer ${driverToken}`)
+      .expect(201);
+
+    const finalOrder = await request(server)
+      .get(`/api/v1/orders/${orderRes.body._id}`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .expect(200);
+    expect(finalOrder.body.status).toBe(OrderStatus.IN_TRANSIT);
+    expect(finalOrder.body.driverId).toBe(driverRes.body._id);
   });
 
   it('rejects a disallowed file type atomically — no company is created on failure', async () => {
@@ -148,10 +252,14 @@ describe('Platform & company onboarding (US5)', () => {
     expect(companiesAfter.some((c) => c.name === 'Should Not Exist Co')).toBe(false);
   });
 
-  it('rejects driver creation without a truck and client creation without a station location', async () => {
+  // spec 008 (research R12, FR-043): a driver's vehicle is no longer part
+  // of their own account at all — creating one without a truck is now the
+  // ONLY legal shape, not a rejected one. The client-without-location half
+  // is unrelated to this feature and still enforced exactly as before.
+  it('accepts driver creation without a truck (spec 008 cutover) and still rejects client creation without a station location', async () => {
     await request(app.getHttpServer())
       .post('/api/v1/users')
-      .set('Authorization', `Bearer ${fixtures.companyA.admin.token}`)
+      .set('Authorization', `Bearer ${fixtures.companyA.transportAdmin.token}`)
       .send({
         role: 'DRIVER',
         email: 'no-truck@companya.test',
@@ -159,7 +267,7 @@ describe('Platform & company onboarding (US5)', () => {
         fullName: 'No Truck',
         phone: '+966500000009',
       })
-      .expect(400);
+      .expect(201);
 
     await request(app.getHttpServer())
       .post('/api/v1/users')

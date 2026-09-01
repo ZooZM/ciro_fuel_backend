@@ -1,24 +1,12 @@
-import {
-  ConflictException,
-  Inject,
-  Injectable,
-  Logger,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { ConflictException, Injectable, Logger, UnauthorizedException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { randomBytes, randomInt, createHash } from 'node:crypto';
 import { ClientSession, Model } from 'mongoose';
 import { ConfigService } from '@nestjs/config';
-import type Redis from 'ioredis';
-import { REDIS_CLIENT } from '../../../common/redis/redis.module';
 import { Order, OrderDocument, OtpPurpose, OtpRecord } from '../schemas/order.schema';
 import { RealtimeGatewayService } from '../../../common/realtime/realtime-gateway.service';
+import { OtpPrimitivesService, OtpVerifyResult } from '../../../common/otp/otp-primitives.service';
 
 const MAX_ATTEMPTS = 5;
-
-function hashOtp(otp: string, salt: string): string {
-  return createHash('sha256').update(`${salt}:${otp}`).digest('hex');
-}
 
 function plaintextCacheKey(orderId: string, purpose: OtpPurpose): string {
   return `otp:${orderId}:${purpose}`;
@@ -31,6 +19,14 @@ function plaintextCacheKey(orderId: string, purpose: OtpPurpose): string {
  * also caches it in Redis with a TTL matching expiry; the cache is deleted
  * the moment the OTP is consumed or invalidated, so it never outlives the
  * hash's own validity window.
+ *
+ * Delegates its hash/salt/cache/lockout primitives to
+ * `OtpPrimitivesService` (spec 005 research R4) — this class owns only
+ * where those primitives are persisted: the order document's `otps[]`
+ * array, addressed by array index. Every external behaviour (Redis key
+ * shape, MAX_ATTEMPTS, the `order:otp` realtime emit, and `peekCurrent`
+ * being the sole plaintext-return path) is unchanged from before the
+ * extraction.
  */
 @Injectable()
 export class OtpService {
@@ -39,7 +35,7 @@ export class OtpService {
   constructor(
     @InjectModel(Order.name) private readonly orderModel: Model<OrderDocument>,
     private readonly config: ConfigService,
-    @Inject(REDIS_CLIENT) private readonly redis: Redis,
+    private readonly otpPrimitives: OtpPrimitivesService,
     private readonly realtimeGateway: RealtimeGatewayService,
   ) {}
 
@@ -59,16 +55,17 @@ export class OtpService {
       return; // still valid — do not regenerate (avoids spam / re-arrival churn)
     }
 
-    const otp = randomInt(0, 1_000_000).toString().padStart(6, '0');
-    const salt = randomBytes(16).toString('hex');
     const expiryMinutes = this.config.get<number>('otp.expiryMinutes') ?? 30;
-    const expiresAt = new Date(Date.now() + expiryMinutes * 60_000);
+    const { record, plaintext } = await this.otpPrimitives.issue(
+      plaintextCacheKey(orderId, purpose),
+      expiryMinutes,
+    );
 
-    const record: OtpRecord = {
+    const otpRecord: OtpRecord = {
       purpose,
-      hash: hashOtp(otp, salt),
-      salt,
-      expiresAt,
+      hash: record.hash,
+      salt: record.salt,
+      expiresAt: record.expiresAt,
       attempts: 0,
       createdAt: new Date(),
     };
@@ -82,17 +79,15 @@ export class OtpService {
       )
       .exec();
     await this.orderModel
-      .updateOne({ _id: orderId }, { $push: { otps: record } }, { session })
+      .updateOne({ _id: orderId }, { $push: { otps: otpRecord } }, { session })
       .exec();
-
-    await this.redis.set(plaintextCacheKey(orderId, purpose), otp, 'EX', expiryMinutes * 60);
 
     // Direct-to-user push (never to the order room — drivers must never see this).
     this.realtimeGateway.emitToUser(String(order.clientId), 'order:otp', {
       orderId,
       purpose,
-      otp,
-      expiresAt,
+      otp: plaintext,
+      expiresAt: record.expiresAt,
     });
   }
 
@@ -111,44 +106,49 @@ export class OtpService {
     }
 
     const recordIndex = order.otps.findIndex((o) => o.purpose === purpose && !o.usedAt);
-    if (recordIndex === -1) {
-      throw new UnauthorizedException('No active OTP for this step');
-    }
-    const record = order.otps[recordIndex];
+    const record = recordIndex === -1 ? undefined : order.otps[recordIndex];
 
-    if (record.expiresAt <= new Date()) {
-      throw new UnauthorizedException('OTP has expired');
-    }
-    if (record.attempts >= MAX_ATTEMPTS) {
-      this.logger.warn(
-        `OTP lockout: order=${orderId} purpose=${purpose} (${MAX_ATTEMPTS} attempts exhausted)`,
-      );
-      throw new UnauthorizedException('Too many incorrect attempts — request a new code');
-    }
+    const result = this.otpPrimitives.verify(record, submittedOtp, MAX_ATTEMPTS);
 
-    const isMatch = hashOtp(submittedOtp, record.salt) === record.hash;
-    if (!isMatch) {
-      await this.orderModel
-        .updateOne(
-          { _id: orderId, [`otps.${recordIndex}`]: { $exists: true } },
-          { $inc: { [`otps.${recordIndex}.attempts`]: 1 } },
-          { session },
-        )
-        .exec();
-      this.logger.warn(
-        `Incorrect OTP: order=${orderId} purpose=${purpose} attempt=${record.attempts + 1}/${MAX_ATTEMPTS}`,
-      );
-      throw new UnauthorizedException('Incorrect OTP');
-    }
+    switch (result) {
+      case OtpVerifyResult.NOT_FOUND:
+        throw new UnauthorizedException('No active OTP for this step');
 
-    await this.orderModel
-      .updateOne(
-        { _id: orderId },
-        { $set: { [`otps.${recordIndex}.usedAt`]: new Date() } },
-        { session },
-      )
-      .exec();
-    await this.redis.del(plaintextCacheKey(orderId, purpose));
+      case OtpVerifyResult.EXPIRED:
+        throw new UnauthorizedException('OTP has expired');
+
+      case OtpVerifyResult.LOCKED_OUT:
+        this.logger.warn(
+          `OTP lockout: order=${orderId} purpose=${purpose} (${MAX_ATTEMPTS} attempts exhausted)`,
+        );
+        throw new UnauthorizedException('Too many incorrect attempts — request a new code');
+
+      case OtpVerifyResult.MISMATCH: {
+        const attemptsSoFar = record!.attempts;
+        await this.orderModel
+          .updateOne(
+            { _id: orderId, [`otps.${recordIndex}`]: { $exists: true } },
+            { $inc: { [`otps.${recordIndex}.attempts`]: 1 } },
+            { session },
+          )
+          .exec();
+        this.logger.warn(
+          `Incorrect OTP: order=${orderId} purpose=${purpose} attempt=${attemptsSoFar + 1}/${MAX_ATTEMPTS}`,
+        );
+        throw new UnauthorizedException('Incorrect OTP');
+      }
+
+      case OtpVerifyResult.MATCH:
+        await this.orderModel
+          .updateOne(
+            { _id: orderId },
+            { $set: { [`otps.${recordIndex}.usedAt`]: new Date() } },
+            { session },
+          )
+          .exec();
+        await this.otpPrimitives.clearCache(plaintextCacheKey(orderId, purpose));
+        return;
+    }
   }
 
   /** Invalidates any currently-active (unused) OTPs — used by force-complete (FR-025). */
@@ -162,7 +162,7 @@ export class OtpService {
       .exec();
     await Promise.all(
       Object.values(OtpPurpose).map((purpose) =>
-        this.redis.del(plaintextCacheKey(orderId, purpose)),
+        this.otpPrimitives.clearCache(plaintextCacheKey(orderId, purpose)),
       ),
     );
   }
@@ -178,7 +178,7 @@ export class OtpService {
     );
     if (!record) return null;
 
-    const otp = await this.redis.get(plaintextCacheKey(orderId, purpose));
+    const otp = await this.otpPrimitives.getCachedPlaintext(plaintextCacheKey(orderId, purpose));
     if (!otp) return null; // cache expired/evicted independently of the hash record
 
     return { purpose: record.purpose, otp, expiresAt: record.expiresAt };

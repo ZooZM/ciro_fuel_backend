@@ -30,19 +30,19 @@ describe('RolesGuard', () => {
   });
 
   it('allows access when the user role is in the required list', () => {
-    jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue([UserRole.COMPANY_ADMIN]);
-    const ctx = buildContext({ role: UserRole.COMPANY_ADMIN });
+    jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue([UserRole.FUEL_COMPANY_ADMIN]);
+    const ctx = buildContext({ role: UserRole.FUEL_COMPANY_ADMIN });
     expect(guard.canActivate(ctx)).toBe(true);
   });
 
   it('denies access when the user role is not in the required list', () => {
-    jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue([UserRole.COMPANY_ADMIN]);
+    jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue([UserRole.FUEL_COMPANY_ADMIN]);
     const ctx = buildContext({ role: UserRole.CLIENT });
     expect(guard.canActivate(ctx)).toBe(false);
   });
 
   it('denies access when there is no authenticated user at all', () => {
-    jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue([UserRole.COMPANY_ADMIN]);
+    jest.spyOn(reflector, 'getAllAndOverride').mockReturnValue([UserRole.FUEL_COMPANY_ADMIN]);
     const ctx = buildContext(undefined);
     expect(guard.canActivate(ctx)).toBe(false);
   });

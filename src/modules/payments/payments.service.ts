@@ -9,6 +9,15 @@ import {
   PaymentEventOutcome,
   PaymentGateway,
 } from './schemas/payment-event.schema';
+import { paginate, PaginatedResponse } from '../../common/pagination/paginate.util';
+import { CursorSortField } from '../../common/pagination/cursor.util';
+
+// Matches the { clientId, createdAt, _id } index the schema already carries
+// for this (spec 005 FR-023/research R3).
+const PAYMENT_SORT_KEYS: CursorSortField[] = [
+  { field: 'createdAt', direction: 'desc' },
+  { field: '_id', direction: 'desc' },
+];
 import { Order, OrderDocument } from '../orders/schemas/order.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
 import { OrderStatus } from '../../common/enums/order-status.enum';
@@ -19,6 +28,8 @@ import { NotificationsService } from '../notifications/notifications.service';
 import { NotificationType } from '../../common/enums/notification-type.enum';
 import { SYSTEM_ACTOR } from '../../common/constants/system-actor';
 import { UserRole } from '../../common/enums/user-role.enum';
+import { InvoicesService } from '../invoices/invoices.service';
+import { RoutingService } from '../dispatch/services/routing.service';
 
 export interface WebhookResult {
   received: true;
@@ -39,7 +50,28 @@ export class PaymentsService {
     private readonly paymentTimeoutQueue: PaymentTimeoutQueueService,
     private readonly notificationsService: NotificationsService,
     private readonly config: ConfigService,
+    private readonly invoicesService: InvoicesService,
+    private readonly routingService: RoutingService,
   ) {}
+
+  /** A CLIENT's own confirmed payments (spec 005 FR-023), paginated,
+   * newest first. `rawPayload` is excluded at the query level, not
+   * stripped after — it can carry gateway card metadata (Principle II) —
+   * and only CONFIRMED events are shown: a failed/invalid webhook attempt
+   * is reconciliation noise, not something the client ever paid. */
+  findForClient(
+    clientId: string,
+    cursor: string | undefined,
+  ): Promise<PaginatedResponse<PaymentEventDocument>> {
+    return paginate(
+      this.paymentEventModel,
+      { clientId: new Types.ObjectId(clientId), outcome: PaymentEventOutcome.CONFIRMED },
+      PAYMENT_SORT_KEYS,
+      cursor,
+      undefined,
+      { rawPayload: 0 },
+    );
+  }
 
   verifySignature(
     gateway: PaymentGateway,
@@ -83,7 +115,8 @@ export class PaymentsService {
         gatewayTransactionId: dto.transactionId,
         gateway,
         orderId: order._id,
-        companyId: order.companyId,
+        companyId: order.fuelCompanyId,
+        clientId: order.clientId,
         amount: dto.amount,
         currency: dto.currency,
         outcome: PaymentEventOutcome.CONFIRMED, // tentative; corrected below if not applicable
@@ -111,27 +144,42 @@ export class PaymentsService {
     }
 
     const session = await this.connection.startSession();
+    let confirmedOrder: OrderDocument | undefined;
     try {
-      let confirmed = false;
       await session.withTransaction(async () => {
-        await this.orderStateService.transition(
+        // Settling the invoice and reverting PENDING_PAYMENT -> APPROVED
+        // happen together — if either fails the whole transaction rolls
+        // back, so a webhook can never leave the invoice settled with the
+        // order still gating payment, or vice versa.
+        await this.invoicesService.settleInvoiceForOrder(order._id, dto.transactionId, session);
+        confirmedOrder = await this.orderStateService.transition(
           order._id as Types.ObjectId,
           OrderStatus.PENDING_PAYMENT,
-          OrderStatus.IN_TRANSIT,
+          OrderStatus.APPROVED,
           SYSTEM_ACTOR,
-          { session, extraSet: { paymentConfirmationId: eventDoc._id } },
+          {
+            session,
+            extraSet: { paymentConfirmationId: eventDoc._id },
+            extraUnset: ['paymentDeadline'],
+          },
         );
-        confirmed = true;
       });
 
-      if (confirmed) {
+      if (confirmedOrder) {
         await this.paymentTimeoutQueue.cancel(String(order._id));
+        // Routing resumes now that settlement unblocked it (FR-020a) —
+        // exactly the step approval itself takes for DEFERRED/CREDIT orders.
+        const { order: routed } = await this.routingService.routeOrder(
+          confirmedOrder,
+          SYSTEM_ACTOR,
+          OrderStatus.APPROVED,
+        );
         await this.notificationsService.notify({
-          companyId: order.companyId,
+          companyId: order.fuelCompanyId,
           recipientUserId: order.clientId,
           type: NotificationType.ORDER_STATUS_CHANGED,
           orderId: order._id as Types.ObjectId,
-          payload: { status: OrderStatus.IN_TRANSIT },
+          payload: { status: routed.status },
         });
         this.logger.log(
           `Payment webhook outcome=CONFIRMED order=${order._id} gatewayTxn=${dto.transactionId}`,
@@ -185,12 +233,12 @@ export class PaymentsService {
 
   private async notifyAdmins(order: OrderDocument, type: NotificationType): Promise<void> {
     const admins = await this.userModel
-      .find({ companyId: order.companyId, role: UserRole.COMPANY_ADMIN, isActive: true })
+      .find({ companyId: order.fuelCompanyId, role: UserRole.FUEL_COMPANY_ADMIN, isActive: true })
       .exec();
     await Promise.all(
       admins.map((admin) =>
         this.notificationsService.notify({
-          companyId: order.companyId,
+          companyId: order.fuelCompanyId,
           recipientUserId: admin._id,
           type,
           orderId: order._id as Types.ObjectId,

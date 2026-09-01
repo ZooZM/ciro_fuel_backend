@@ -40,6 +40,15 @@ export class PaymentEvent {
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'Company', required: true })
   companyId!: Types.ObjectId;
 
+  // spec 005 FR-023/research R5: denormalised from the order at write time
+  // rather than resolved through it on every read — makes the client's own
+  // payment history a direct, indexable query instead of a join, and is
+  // what the { clientId, createdAt, _id } pagination index (T023) needs.
+  // Optional: events predating this feature are back-filled by T016's
+  // migration; genuinely orphaned ones (order deleted) stay unset.
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User' })
+  clientId?: Types.ObjectId;
+
   @Prop({ required: true })
   amount!: number;
 
@@ -56,3 +65,5 @@ export class PaymentEvent {
 export const PaymentEventSchema = SchemaFactory.createForClass(PaymentEvent);
 markTenantScoped(PaymentEventSchema);
 PaymentEventSchema.index({ orderId: 1 });
+// spec 005 FR-023/research R3: supports GET /payments' cursor pagination.
+PaymentEventSchema.index({ clientId: 1, createdAt: -1, _id: -1 });

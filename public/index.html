@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ciro — Order Cycle Test Dashboard</title>
+    <style>
+      :root {
+        --bg: #0f1115;
+        --panel: #171a21;
+        --panel2: #1e222b;
+        --line: #2a2f3a;
+        --text: #e6e8ee;
+        --muted: #9aa3b2;
+        --accent: #4f8cff;
+        --ok: #2ecc71;
+        --warn: #f1c40f;
+        --err: #ff5c5c;
+        --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      }
+      h1 { font-size: 15px; margin: 0; }
+      h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 8px; }
+      h3 { font-size: 12px; margin: 12px 0 6px; color: var(--muted); }
+      a { color: var(--accent); }
+      button {
+        background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+        border-radius: 6px; padding: 5px 9px; cursor: pointer; font-size: 12px;
+      }
+      button:hover:not(:disabled) { border-color: var(--accent); }
+      button:disabled { opacity: .4; cursor: not-allowed; }
+      button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+      button.danger { border-color: #6b2b2b; color: #ff9d9d; }
+      input, select {
+        background: #12151c; color: var(--text); border: 1px solid var(--line);
+        border-radius: 6px; padding: 5px 7px; font-size: 12px; width: 100%;
+      }
+      input:focus, select:focus { outline: 1px solid var(--accent); }
+      label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 3px; }
+      .field { margin-bottom: 7px; }
+      .row { display: flex; gap: 6px; }
+      .row > * { flex: 1; }
+      .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 12px; margin-bottom: 12px; }
+      .mono { font-family: var(--mono); }
+      .muted { color: var(--muted); }
+      .pill {
+        display: inline-block; padding: 1px 7px; border-radius: 99px; font-size: 10.5px;
+        border: 1px solid var(--line); background: #12151c; letter-spacing: .03em;
+      }
+      .pill.ok { color: var(--ok); border-color: #1e5c3a; }
+      .pill.warn { color: var(--warn); border-color: #6b5a1b; }
+      .pill.err { color: var(--err); border-color: #6b2b2b; }
+      .pill.info { color: var(--accent); border-color: #2b4a80; }
+
+      header {
+        display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+        padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--panel);
+        position: sticky; top: 0; z-index: 5;
+      }
+      header .grow { flex: 1; }
+      header .cfg { display: flex; gap: 8px; align-items: center; }
+      header .cfg input { width: 190px; }
+
+      main { display: grid; grid-template-columns: 300px minmax(420px, 1fr) 380px; gap: 12px; padding: 12px; align-items: start; }
+      @media (max-width: 1200px) { main { grid-template-columns: 1fr; } }
+
+      /* Sessions */
+      .session { border: 1px solid var(--line); border-radius: 7px; padding: 8px; margin-bottom: 8px; background: var(--panel2); }
+      .session .head { display: flex; justify-content: space-between; align-items: center; gap: 6px; margin-bottom: 6px; }
+      .session .head b { font-size: 11.5px; letter-spacing: .04em; }
+      .session .who { font-size: 11px; color: var(--muted); word-break: break-all; }
+
+      /* Board */
+      .board { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
+      .col { background: var(--panel2); border: 1px solid var(--line); border-radius: 7px; padding: 7px; min-height: 54px; }
+      .col > .title { font-size: 10.5px; letter-spacing: .05em; color: var(--muted); margin-bottom: 6px; display: flex; justify-content: space-between; }
+      .card {
+        background: #12151c; border: 1px solid var(--line); border-radius: 6px;
+        padding: 6px 7px; margin-bottom: 6px; cursor: pointer; font-size: 11.5px;
+      }
+      .card:hover { border-color: var(--accent); }
+      .card.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+      .card .id { font-family: var(--mono); font-size: 10.5px; color: var(--muted); }
+
+      /* Detail */
+      table.kv { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+      table.kv td { padding: 3px 6px 3px 0; vertical-align: top; border-bottom: 1px solid #21252e; }
+      table.kv td:first-child { color: var(--muted); width: 130px; white-space: nowrap; }
+      .actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+      .inputs { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 7px; margin-top: 10px; }
+
+      /* Log */
+      .log { max-height: 60vh; overflow: auto; font-family: var(--mono); font-size: 11px; }
+      .log .entry { border-bottom: 1px solid #21252e; padding: 5px 0; }
+      .log .entry .l1 { display: flex; gap: 6px; align-items: baseline; }
+      .log .entry pre { margin: 4px 0 0; white-space: pre-wrap; word-break: break-word; color: var(--muted); max-height: 160px; overflow: auto; }
+      .log .entry.err .l1 { color: var(--err); }
+
+      /* Runner */
+      .steps { list-style: none; margin: 8px 0 0; padding: 0; font-size: 11.5px; }
+      .steps li { padding: 3px 0; border-bottom: 1px solid #21252e; display: flex; gap: 7px; }
+      .steps li .mark { width: 14px; text-align: center; }
+      .steps li.done .mark { color: var(--ok); }
+      .steps li.fail .mark { color: var(--err); }
+      .steps li.run .mark { color: var(--accent); }
+      .steps li.skip { color: var(--muted); }
+    </style>
+  </head>
+  <body>
+    <!-- Removed by dashboard.js on boot. If you can still read it, the script
+         did not run — every panel below is inert static markup until it does. -->
+    <div id="bootWarning" style="background:#5c1f1f;color:#ffdada;padding:10px 14px;border-bottom:1px solid #8a3030;font-size:12.5px">
+      <b>dashboard.js has not run.</b> Nothing on this page works yet. Hard-reload
+      (<b>⌘⇧R</b>) to clear a cached copy, and confirm
+      <a href="/dashboard/dashboard.js" style="color:#fff">/dashboard/dashboard.js</a> returns JavaScript rather than a 404.
+    </div>
+
+    <header>
+      <h1>Ciro · Order Cycle Test Dashboard</h1>
+      <div class="cfg">
+        <label for="baseUrl" style="margin:0">API</label>
+        <input id="baseUrl" spellcheck="false" />
+      </div>
+      <div class="cfg">
+        <label for="sadadSecret" style="margin:0">SADAD secret</label>
+        <input id="sadadSecret" spellcheck="false" />
+      </div>
+      <div class="cfg">
+        <label for="madaSecret" style="margin:0">MADA secret</label>
+        <input id="madaSecret" spellcheck="false" />
+      </div>
+      <div class="grow"></div>
+      <label style="margin:0; display:flex; gap:5px; align-items:center;">
+        <input type="checkbox" id="pollToggle" style="width:auto" checked /> poll 4s
+      </label>
+      <button id="refreshBtn">Refresh</button>
+      <button id="resetBtn" class="danger">Clear saved state</button>
+    </header>
+
+    <main>
+      <!-- ── Column 1 ─────────────────────────────────────────── -->
+      <div>
+        <section class="panel">
+          <h2>Sessions</h2>
+          <div id="sessions"></div>
+          <div class="muted" style="font-size:11px">
+            Admins log in by email, CLIENT/DRIVER by phone (<span class="mono">+9665…</span>).
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>Driver presence</h2>
+          <p class="muted" style="margin:0 0 8px; font-size:11px">
+            A driver is only assignable while online — presence comes from the
+            <span class="mono">/tracking</span> socket, so connect before dispatch.
+          </p>
+          <div id="socketState" style="margin-bottom:8px"><span class="pill">disconnected</span></div>
+          <div class="row">
+            <div class="field"><label for="drvLat">lat</label><input id="drvLat" value="24.7136" /></div>
+            <div class="field"><label for="drvLng">lng</label><input id="drvLng" value="46.6753" /></div>
+          </div>
+          <div class="actions">
+            <button id="sockConnect">Connect driver</button>
+            <button id="sockLocate">Send location</button>
+            <button id="sockDisconnect">Disconnect</button>
+          </div>
+        </section>
+
+        <section class="panel">
+          <h2>New order (CLIENT)</h2>
+          <div class="field">
+            <label for="fuelType">fuelType</label>
+            <select id="fuelType">
+              <option>DIESEL</option><option>PETROL_91</option>
+              <option>PETROL_95</option><option>KEROSENE</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="qty">quantityLiters</label><input id="qty" type="number" value="5000" />
+          </div>
+          <div class="field">
+            <label for="paymentMethod">paymentMethod</label>
+            <select id="paymentMethod">
+              <option>DIRECT</option><option>DEFERRED</option><option>CREDIT</option>
+            </select>
+          </div>
+          <div class="row">
+            <div class="field"><label for="lat">lat (optional)</label><input id="lat" value="" /></div>
+            <div class="field"><label for="lng">lng (optional)</label><input id="lng" value="" /></div>
+          </div>
+          <button id="createOrder" class="primary" style="width:100%">Create order</button>
+        </section>
+
+        <section class="panel">
+          <h2>Full-cycle runner</h2>
+          <p class="muted" style="margin:0 0 6px; font-size:11px">
+            Creates an order and drives it to DELIVERED using every session above.
+          </p>
+          <div class="actions" style="margin-top:0">
+            <button id="runCycle" class="primary">Run happy path</button>
+            <button id="stopCycle" class="danger">Stop</button>
+          </div>
+          <ul class="steps" id="steps"></ul>
+        </section>
+      </div>
+
+      <!-- ── Column 2 ─────────────────────────────────────────── -->
+      <div>
+        <section class="panel">
+          <h2>Order pipeline</h2>
+          <div class="board" id="board"></div>
+        </section>
+        <section class="panel">
+          <h2>Selected order</h2>
+          <div id="detail" class="muted">No order selected.</div>
+        </section>
+        <section class="panel">
+          <h2>Invoices</h2>
+          <div class="actions" style="margin:0 0 8px">
+            <button data-inv-role="FUEL_COMPANY_ADMIN">Load as FUEL</button>
+            <button data-inv-role="TRANSPORT_COMPANY_ADMIN">Load as TRANSPORT</button>
+            <button data-inv-role="CLIENT">Load as CLIENT</button>
+          </div>
+          <div id="invoices" class="muted">Not loaded.</div>
+        </section>
+      </div>
+
+      <!-- ── Column 3 ─────────────────────────────────────────── -->
+      <div>
+        <section class="panel">
+          <h2>Activity log</h2>
+          <div class="actions" style="margin:0 0 8px">
+            <button id="clearLog">Clear</button>
+          </div>
+          <div class="log" id="log"></div>
+        </section>
+      </div>
+    </main>
+
+    <!-- Absolute, not relative: a relative src breaks the moment the page is
+         reached by any path other than exactly /dashboard/ (no trailing slash,
+         a cached redirect, a reverse proxy prefix). -->
+    <script src="/dashboard/dashboard.js"></script>
+  </body>
+</html>

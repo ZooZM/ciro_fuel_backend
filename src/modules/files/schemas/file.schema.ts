@@ -20,8 +20,26 @@ export class FileRecord {
   @Prop({ type: String, required: true, enum: FilePurpose })
   purpose!: FilePurpose;
 
-  // Always server-generated (sys_storge/{companyId}/{uuid}{ext}) — never
-  // derived from client input, so path traversal is structurally impossible (R10).
+  /**
+   * The key the bytes are stored under. Always server-generated
+   * (`sys_storge/{companyId}/{uuid}{ext}`) — never derived from client input,
+   * so path traversal is structurally impossible (spec 001 R10).
+   *
+   * **It keeps its name and its type** (spec 012 FR-038). Since Story 6 the
+   * CONTENT changed — an object key rather than an absolute filesystem path —
+   * but renaming it to `objectKey` would read better and would break the
+   * response payload freeze. Neither client reads it (both address files by
+   * `_id`) and it was never stable anyway: it previously embedded
+   * `process.cwd()` and so already differed between machines.
+   *
+   * **The `sys_storge/{companyId}/…` prefix enforces NOTHING** (FR-040a). The
+   * object store serves any object to any holder of a valid signed URL
+   * regardless of its key path — the tenant boundary is held entirely by the
+   * tenant-scoped read in `FilesService.findForDownload`, which must succeed
+   * before a URL is signed. The prefix is organisation, retained because the
+   * constitution names `sys_storge`; any future code that reads tenancy out of
+   * a key path is a defect.
+   */
   @Prop({ required: true })
   storagePath!: string;
 
@@ -36,5 +54,13 @@ export class FileRecord {
 }
 
 export const FileRecordSchema = SchemaFactory.createForClass(FileRecord);
+/**
+ * DO NOT REMOVE (spec 012 T066). This marker is the ONLY tenant check on the
+ * download path: `files.controller.ts:download` has no explicit check and
+ * correctly needs none, because `findForDownload`'s `findById` runs through the
+ * scoping plugin and a cross-tenant id resolves to nothing — a 404, never a
+ * 403. The controller LOOKS unprotected; removing this line opens a
+ * cross-tenant read with no other change and no failing test elsewhere.
+ */
 markTenantScoped(FileRecordSchema);
 FileRecordSchema.index({ companyId: 1, purpose: 1 });

@@ -1,6 +1,6 @@
 import { IsEmail, IsString, MinLength } from 'class-validator';
 
-export class CreateCompanyDto {
+export class CreateFuelCompanyDto {
   @IsString()
   @MinLength(2)
   name!: string;

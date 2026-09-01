@@ -29,3 +29,5 @@ export class Notification {
 export const NotificationSchema = SchemaFactory.createForClass(Notification);
 markTenantScoped(NotificationSchema);
 NotificationSchema.index({ recipientUserId: 1, readAt: 1, createdAt: -1 });
+// spec 005 FR-031/research R3: supports GET /notifications' cursor pagination.
+NotificationSchema.index({ recipientUserId: 1, createdAt: -1, _id: -1 });

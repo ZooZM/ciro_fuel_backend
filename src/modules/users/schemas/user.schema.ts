@@ -1,28 +1,48 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document, Schema as MongooseSchema, Types } from 'mongoose';
 import { UserRole } from '../../../common/enums/user-role.enum';
-import { FuelType } from '../../../common/enums/fuel-type.enum';
+import { GovernorateCode, RegionCode } from '../../../common/enums/region.enum';
 import { GeoPoint, GeoPointSchema } from '../../../common/schemas/geo-point.schema';
 import { markTenantScoped } from '../../../common/plugins/tenant-scoped.marker';
+import { SessionRevocationCause } from '../../../common/enums/session-revocation-cause.enum';
+
+/**
+ * A client's station (spec 004 US3): region and governorate for routing
+ * (FR-014), the dropped pin, and the final address text — geocode-suggested
+ * but user-edited, and never re-derived from the pin on a later read
+ * (FR-012). `name` is an optional display label ("محطة الرحاب"),
+ * independent of the address text.
+ */
+@Schema({ _id: false })
+export class Station {
+  @Prop({ type: String, required: true, enum: RegionCode })
+  regionCode!: RegionCode;
+
+  @Prop({ type: String, required: true, enum: GovernorateCode })
+  governorateCode!: GovernorateCode;
+
+  @Prop({ type: GeoPointSchema, required: true })
+  location!: GeoPoint;
+
+  // Editable at registration (FR-011); may be empty if the geocode lookup
+  // was unavailable and the admin saved without typing one in (FR-013).
+  @Prop({ trim: true, default: '' })
+  addressText!: string;
+
+  @Prop({ trim: true })
+  name?: string;
+}
+export const StationSchema = SchemaFactory.createForClass(Station);
 
 export type UserDocument = User & Document;
 
-@Schema({ _id: false })
-export class Truck {
-  @Prop({ required: true, trim: true })
-  plateNumber!: string;
-
-  @Prop({ required: true, min: 1 })
-  maxCapacityLiters!: number;
-
-  // Non-empty; dispatch matches an order's fuelType against this list (FR-011).
-  @Prop({ required: true, type: [String], enum: FuelType })
-  fuelTypes!: FuelType[];
-
-  @Prop()
-  model?: string;
-}
-export const TruckSchema = SchemaFactory.createForClass(Truck);
+// spec 008 (FR-043, research R12): the embedded per-driver `Truck` that used
+// to live here is deleted outright, not migrated — a deliberate flag day
+// accepted because the platform is pre-production and holds only test data.
+// A vehicle is now two company-owned records with their own identity,
+// `src/modules/trucks/schemas/truck.schema.ts` and
+// `src/modules/tanks/schemas/tank.schema.ts`, assigned to a driver per
+// order rather than bound to their account.
 
 @Schema({ timestamps: true })
 export class User {
@@ -51,9 +71,38 @@ export class User {
   @Prop({ default: true })
   isActive!: boolean;
 
+  // Session revocation counter (spec 006 FR-027/029/035b/042). Bumped on
+  // sign-out, password reset, deactivation, and displacement by a sign-in
+  // elsewhere — each bump invalidates every token minted against the prior
+  // value, since `UsersService.validateActiveSessionWithScoping` compares
+  // this against the JWT's `sgen` on every authenticated request and every
+  // `/tracking` handshake. A driver holds at most one live session by
+  // construction: issuing a new one necessarily invalidates the last.
+  // Absent on documents from before this feature; normalized to 0 both
+  // here and on the JWT side so every session in circulation at deploy
+  // time keeps working (research R1) — no backfill migration needed.
+  @Prop({ default: 0, min: 0 })
+  sessionGeneration?: number;
+
+  // Why the CURRENT `sessionGeneration` was last bumped by something other
+  // than the driver's own sign-out (spec 006 FR-036) — absent after a
+  // plain sign-out, since there is no stale-token 401 to explain in that
+  // case. Read by `validateActiveSessionWithScoping`'s mismatch branch to
+  // populate the `SESSION_REVOKED` response's `cause` field.
+  @Prop({ type: String, enum: SessionRevocationCause })
+  lastRevocationCause?: SessionRevocationCause;
+
   // --- CLIENT-only fields ---
-  @Prop({ type: GeoPointSchema })
-  stationLocation?: GeoPoint;
+  @Prop({ type: StationSchema })
+  station?: Station;
+
+  // SAR, matching the platform's existing plain-number money convention
+  // (e.g. Company.fuelPrices.basePricePerLiter, Order.estimatedPrice). Set
+  // by the owning Fuel Company (FR-023); undefined for a client with no
+  // credit arrangement — never assumed to be zero available credit vs. "no
+  // credit method offered at all".
+  @Prop({ min: 0 })
+  creditLimit?: number;
 
   // --- DRIVER-only fields ---
   @Prop({ default: true })
@@ -74,14 +123,55 @@ export class User {
   @Prop()
   locationUpdatedAt?: Date;
 
-  @Prop({ type: TruckSchema })
-  truck?: Truck;
+  // spec 011 FR-017 — movement, which is NOT presence. `lastSeenAt` above
+  // answers "is this device talking to us at all"; these answer "has this
+  // truck actually gone anywhere". The tracking stream heartbeats every few
+  // minutes even from a parked driver, so a stationary truck keeps
+  // advancing `lastSeenAt`/`locationUpdatedAt` while these two stay put —
+  // which is exactly what makes "reporting the same position" and
+  // "reporting nothing" distinguishable by construction rather than by
+  // inference. Stop detection reads `lastMovedAt`; presence reads
+  // `lastSeenAt`; neither may be substituted for the other.
+  @Prop()
+  lastMovedAt?: Date;
+
+  // The baseline the next fix is measured against — deliberately NOT
+  // `location`, which every accepted fix updates. Measuring displacement
+  // against `location` would let a parked truck drift past the threshold in
+  // repeated sub-threshold steps and read as moving, so a genuinely stalled
+  // delivery would never be detected (FR-003/SC-007).
+  @Prop({ type: GeoPointSchema })
+  lastMovedLocation?: GeoPoint;
+
+  // spec 007 FR-029/FR-031: deliberately no `default` — `undefined` IS the
+  // "not yet rated" state, distinct from a real score of `0` (which
+  // `ratingAverage`'s own `min: 1` makes impossible anyway, but a default
+  // here would still collapse "no ratings" and "some ratings" at the data
+  // layer before the app ever gets a chance to distinguish them).
+  @Prop({ min: 1, max: 5 })
+  ratingAverage?: number;
+
+  @Prop({ min: 0, default: 0 })
+  ratingCount?: number;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);
 markTenantScoped(UserSchema);
 
+// Phone is a login identifier for CLIENT/DRIVER, so it must resolve to exactly
+// one account across all tenants. Partial so admin placeholder phones ('N/A')
+// stay exempt.
+UserSchema.index(
+  { phone: 1 },
+  { unique: true, partialFilterExpression: { role: { $in: [UserRole.CLIENT, UserRole.DRIVER] } } },
+);
+
 UserSchema.index({ companyId: 1, role: 1 });
+// A second 2dsphere index (e.g. on station.location) would make Mongo's
+// $geoNear ambiguous about which index to use — DispatchService.assignDriver
+// depends on this being the only one. Add a geospatial index on
+// station.location only once something actually queries by it, and specify
+// $geoNear's `key` explicitly if both must coexist.
 UserSchema.index({ location: '2dsphere' });
 UserSchema.index(
   { activeOrderId: 1 },
@@ -89,3 +179,10 @@ UserSchema.index(
 );
 UserSchema.index({ companyId: 1, role: 1, isActive: 1, isOnline: 1, isAvailable: 1 });
 UserSchema.index({ role: 1, isOnline: 1, lastSeenAt: 1 });
+// spec 011: the stop-detection sweep asks "which drivers currently holding a
+// delivery have not moved since <cutoff>?" — role equality plus a range on
+// lastMovedAt. Deliberately a DRIVER-first query rather than an order-first
+// one: the selective predicate (a stale lastMovedAt) lives here, and at any
+// moment nearly every driver on a delivery is moving, so this narrows to the
+// handful that are not before touching Order at all.
+UserSchema.index({ role: 1, lastMovedAt: 1 });

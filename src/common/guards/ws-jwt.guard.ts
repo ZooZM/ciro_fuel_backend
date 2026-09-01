@@ -39,10 +39,15 @@ export async function authenticateSocket(
   const payload = await jwtService.verifyAsync<JwtPayload>(token, {
     secret: config.get<string>('jwt.secret'),
   });
-  const user = await usersService.validateActiveSession(payload.sub);
+  // spec 006: also refuses a handshake whose session has since been
+  // revoked — the free offline fallback for a push the device missed
+  // while disconnected (FR-035a, research R2).
+  const { user, parentFuelCompanyId } =
+    await usersService.validateActiveSessionWithScoping(payload);
   return {
     userId: (user._id as { toString(): string }).toString(),
     role: user.role,
     companyId: user.companyId?.toString(),
+    parentFuelCompanyId,
   };
 }

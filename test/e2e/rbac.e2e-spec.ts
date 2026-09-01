@@ -53,15 +53,28 @@ describe('Role-based access control (US2) — denial matrix', () => {
       .expect(403);
   });
 
-  it('denies CLIENT and DRIVER from manually triggering dispatch (COMPANY_ADMIN only)', async () => {
+  it('denies CLIENT, DRIVER, and FUEL_COMPANY_ADMIN from assigning a driver (TRANSPORT_COMPANY_ADMIN only, spec 004 FR-017)', async () => {
+    const body = { driverId: '000000000000000000000000' };
+
     await request(app.getHttpServer())
-      .post('/api/v1/dispatch/orders/000000000000000000000000')
+      .post('/api/v1/dispatch/orders/000000000000000000000000/assign')
       .set('Authorization', `Bearer ${fixtures.companyA.client.token}`)
+      .send(body)
       .expect(403);
 
     await request(app.getHttpServer())
-      .post('/api/v1/dispatch/orders/000000000000000000000000')
+      .post('/api/v1/dispatch/orders/000000000000000000000000/assign')
       .set('Authorization', `Bearer ${fixtures.companyA.driver.token}`)
+      .send(body)
+      .expect(403);
+
+    // Driver assignment moved from the Fuel Company to the Transportation
+    // Company (spec 004 US4) — the Fuel Company admin is no longer permitted
+    // on this specific route, even though they still approve/reject orders.
+    await request(app.getHttpServer())
+      .post('/api/v1/dispatch/orders/000000000000000000000000/assign')
+      .set('Authorization', `Bearer ${fixtures.companyA.admin.token}`)
+      .send(body)
       .expect(403);
   });
 

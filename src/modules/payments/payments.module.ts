@@ -12,6 +12,8 @@ import {
 import { PaymentTimeoutProcessor } from './queues/payment-timeout.processor';
 import { OrderCoreModule } from '../orders/order-core.module';
 import { NotificationsModule } from '../notifications/notifications.module';
+import { InvoicesModule } from '../invoices/invoices.module';
+import { DispatchModule } from '../dispatch/dispatch.module';
 
 @Module({
   imports: [
@@ -22,6 +24,11 @@ import { NotificationsModule } from '../notifications/notifications.module';
     BullModule.registerQueue({ name: PAYMENT_TIMEOUT_QUEUE }),
     OrderCoreModule,
     NotificationsModule,
+    InvoicesModule,
+    // For RoutingService — settlement resumes routing (FR-020a). Safe: since
+    // DispatchModule no longer imports PaymentsModule (dispatch.module.ts,
+    // spec 004 US5), this is a one-directional edge, not a cycle.
+    DispatchModule,
   ],
   controllers: [PaymentsController],
   providers: [PaymentsService, PaymentTimeoutQueueService, PaymentTimeoutProcessor],

@@ -4,47 +4,88 @@ import {
   Controller,
   ForbiddenException,
   Get,
+  HttpCode,
   Param,
   Patch,
   Post,
+  Put,
   Query,
   UploadedFile,
+  UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { InjectConnection } from '@nestjs/mongoose';
+import { Connection } from 'mongoose';
 import { UsersService } from './users.service';
 import { FilesService } from '../files/files.service';
 import { FilePurpose } from '../files/schemas/file.schema';
-import { CreateUserDto } from './dto/create-user.dto';
-import { UpdateTruckDto } from './dto/update-truck.dto';
+import { CreateUserDto, StationDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { SetCreditLimitDto } from './dto/set-credit-limit.dto';
+import { RequestPhoneVerificationDto } from './dto/request-phone-verification.dto';
+import { ConfirmPhoneVerificationDto } from './dto/confirm-phone-verification.dto';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { UserRole } from '../../common/enums/user-role.enum';
+import { roundCurrency } from '../../common/constants/money.constants';
 import { AuthenticatedUser } from '../../common/interfaces/jwt-payload.interface';
 import { ObjectIdPipe } from '../../common/pipes/object-id.pipe';
+import { governorateBelongsToRegion } from '../regions/regions.constants';
+import { StationsService } from '../stations/stations.service';
+import { InvoicesService } from '../invoices/invoices.service';
+import { PhoneVerificationService } from './services/phone-verification.service';
+import { CompaniesService } from '../companies/companies.service';
+import { UserThrottlerGuard } from '../../common/guards/user-throttler.guard';
+import { SessionAuditService } from '../sessions/session-audit.service';
+import { SessionRevocationCause } from '../../common/enums/session-revocation-cause.enum';
+import { RealtimeGatewayService } from '../../common/realtime/realtime-gateway.service';
+
+const SESSION_REVOKED_EVENT = 'session:revoked';
 
 @Controller({ path: 'users', version: '1' })
 export class UsersController {
   constructor(
     private readonly usersService: UsersService,
     private readonly filesService: FilesService,
+    private readonly stationsService: StationsService,
+    private readonly invoicesService: InvoicesService,
+    private readonly phoneVerificationService: PhoneVerificationService,
+    private readonly companiesService: CompaniesService,
+    private readonly sessionAudit: SessionAuditService,
+    private readonly realtimeGateway: RealtimeGatewayService,
+    @InjectConnection() private readonly connection: Connection,
   ) {}
 
-  @Roles(UserRole.COMPANY_ADMIN)
+  // Split by tier (spec 004 FR-004a and its symmetric driver-fleet
+  // counterpart): a FUEL_COMPANY_ADMIN provisions CLIENT accounts only —
+  // clients are the Fuel Company's own relationship, never the
+  // transporter's. A TRANSPORT_COMPANY_ADMIN provisions DRIVER accounts
+  // only — the fleet is exclusively theirs. Neither may create the other's
+  // role, even though both reach this one endpoint.
+  @Roles(UserRole.FUEL_COMPANY_ADMIN, UserRole.TRANSPORT_COMPANY_ADMIN)
   @Post()
-  create(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreateUserDto) {
+  async create(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreateUserDto) {
     if (!user.companyId) {
       throw new BadRequestException('Acting user must belong to a company');
     }
-    if (dto.role === UserRole.CLIENT && !dto.stationLocation) {
-      throw new BadRequestException('stationLocation is required for CLIENT accounts');
+    if (user.role === UserRole.FUEL_COMPANY_ADMIN && dto.role !== UserRole.CLIENT) {
+      throw new ForbiddenException('A Fuel Company may only create CLIENT accounts');
     }
-    if (dto.role === UserRole.DRIVER && !dto.truck) {
-      throw new BadRequestException('truck is required for DRIVER accounts');
+    if (user.role === UserRole.TRANSPORT_COMPANY_ADMIN && dto.role !== UserRole.DRIVER) {
+      throw new ForbiddenException('A Transportation Company may only create DRIVER accounts');
     }
-
-    return this.usersService.create({
+    if (dto.role === UserRole.CLIENT && !dto.station) {
+      throw new BadRequestException('station is required for CLIENT accounts');
+    }
+    if (
+      dto.role === UserRole.CLIENT &&
+      !governorateBelongsToRegion(dto.station!.governorateCode, dto.station!.regionCode)
+    ) {
+      throw new BadRequestException('governorateCode does not belong to regionCode');
+    }
+    const created = await this.usersService.create({
       companyId: user.companyId as never,
       role: dto.role,
       email: dto.email,
@@ -54,9 +95,23 @@ export class UsersController {
       isActive: true,
       ...(dto.role === UserRole.CLIENT
         ? {
-            stationLocation: {
-              type: 'Point',
-              coordinates: [dto.stationLocation!.longitude, dto.stationLocation!.latitude],
+            // Kept for backward compatibility only (spec 005 data-model.md)
+            // — no new code path reads this field; StationsService.create
+            // below is what actually seeds the client's station going
+            // forward. Left in place because client-station.e2e-spec.ts
+            // and every other pre-005 consumer still exercise it directly.
+            station: {
+              regionCode: dto.station!.regionCode,
+              governorateCode: dto.station!.governorateCode,
+              location: {
+                type: 'Point',
+                coordinates: [dto.station!.location.longitude, dto.station!.location.latitude],
+              },
+              // Never re-derived from the pin on a later read (FR-012) —
+              // whatever the client edits it to (or leaves empty, FR-013) is
+              // exactly what's stored.
+              addressText: dto.station!.addressText ?? '',
+              name: dto.station!.name,
             } as never,
           }
         : {}),
@@ -64,31 +119,156 @@ export class UsersController {
         ? {
             isAvailable: true,
             isOnline: false,
-            truck: dto.truck as never,
           }
         : {}),
     });
+
+    // spec 005 D2: a client's real station now lives in its own collection,
+    // not just the legacy embedded field above — created here so a client
+    // has a genuine Station document (and passes GET /stations, FR-036a)
+    // from the moment they're onboarded, not only after the migration or an
+    // admin's first visit to the (not-yet-built) station management screen.
+    if (dto.role === UserRole.CLIENT) {
+      await this.stationsService.create(String(created._id), String(user.companyId), {
+        name: dto.station!.name,
+        regionCode: dto.station!.regionCode,
+        governorateCode: dto.station!.governorateCode,
+        location: {
+          type: 'Point',
+          coordinates: [dto.station!.location.longitude, dto.station!.location.latitude],
+        } as never,
+        addressText: dto.station!.addressText,
+      });
+    }
+
+    return created;
   }
 
-  @Roles(UserRole.COMPANY_ADMIN, UserRole.SUPER_ADMIN)
+  // Tenant-scoped automatically (the existing single-tenant plugin, unchanged):
+  // a FUEL_COMPANY_ADMIN sees their own clients/admins, a
+  // TRANSPORT_COMPANY_ADMIN sees their own drivers — never each other's.
+  @Roles(UserRole.FUEL_COMPANY_ADMIN, UserRole.TRANSPORT_COMPANY_ADMIN, UserRole.SUPER_ADMIN)
   @Get()
   findAll(@Query('role') role?: UserRole, @Query('isActive') isActive?: string) {
+    // An empty value (`?role=&isActive=`, which is what an unset filter in a UI
+    // sends) means "no filter" — not "match empty" or "match inactive".
     return this.usersService.findAll({
-      role,
-      isActive: isActive === undefined ? undefined : isActive === 'true',
+      role: role || undefined,
+      isActive: isActive ? isActive === 'true' : undefined,
+    });
+  }
+
+  /**
+   * spec 005 T081/FR-026: the CLIENT's own credit standing, computed live
+   * from the same derivation `InvoicesService.getAvailableCredit` already
+   * uses to refuse an over-limit order — nothing here is a second,
+   * independently stored figure that could drift from it. Registered
+   * ahead of `GET /users/:id` below; Nest matches routes in declaration
+   * order, so `:id` would otherwise swallow `me` as an id.
+   */
+  @Roles(UserRole.CLIENT)
+  @Get('me/credit')
+  async myCredit(@CurrentUser() user: AuthenticatedUser) {
+    const client = await this.usersService.findById(user.userId);
+    if (client.creditLimit == null) {
+      return { creditLimit: null, consumed: null, available: null };
+    }
+    const available = await this.invoicesService.getAvailableCredit(user.userId);
+    return {
+      creditLimit: client.creditLimit,
+      // Rounded because the subtraction is floating point: a limit of
+      // 1000000 less an available 987094.12 evaluates to
+      // 12905.880000000005, and this figure is rendered to the client as
+      // money on both the dashboard and the credit screen (FR-026/FR-029).
+      consumed: roundCurrency(client.creditLimit - available),
+      available,
+    };
+  }
+
+  /** spec 005 T097/FR-035 — any authenticated role may change their own
+   * phone; per-user throttled (T098), never the global per-IP guard. */
+  @UseGuards(UserThrottlerGuard)
+  @Throttle({ perUser: { limit: 3, ttl: 15 * 60_000 } })
+  @HttpCode(202)
+  @Post('me/phone/verification')
+  requestPhoneVerification(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: RequestPhoneVerificationDto,
+  ) {
+    return this.phoneVerificationService.requestVerification(user.userId, dto.newPhone);
+  }
+
+  // The 5-attempts-per-code limit is enforced by PhoneVerificationService
+  // itself (OtpPrimitivesService's lockout, keyed to the specific code's
+  // own record) — not a `@nestjs/throttler` time window, which has no
+  // concept of "per code". A locked-out attempt still surfaces as 429.
+  @Post('me/phone/verification/confirm')
+  confirmPhoneVerification(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: ConfirmPhoneVerificationDto,
+  ) {
+    return this.phoneVerificationService.confirm(user.userId, dto.code);
+  }
+
+  /** spec 005 T108 — a station is provisioned for a specific client, hence
+   * nested under `/users` rather than `/stations`. `findById` is itself
+   * tenant-scoped (the plugin merges the admin's own `companyId` into the
+   * query), so a foreign or nonexistent id 404s here before any station
+   * work happens — the same fail-closed check `setCreditLimit` above uses. */
+  @Roles(UserRole.FUEL_COMPANY_ADMIN)
+  @Get(':id/stations')
+  async findClientStations(@Param('id', ObjectIdPipe) id: string) {
+    const target = await this.usersService.findById(id);
+    if (target.role !== UserRole.CLIENT) {
+      throw new BadRequestException('Stations may only be listed for CLIENT accounts');
+    }
+    const items = await this.stationsService.findForClientAsAdmin(id);
+    return { items };
+  }
+
+  @Roles(UserRole.FUEL_COMPANY_ADMIN)
+  @Post(':id/stations')
+  async createClientStation(@Param('id', ObjectIdPipe) id: string, @Body() dto: StationDto) {
+    const target = await this.usersService.findById(id);
+    if (target.role !== UserRole.CLIENT) {
+      throw new BadRequestException('Stations may only be created for CLIENT accounts');
+    }
+    if (!governorateBelongsToRegion(dto.governorateCode, dto.regionCode)) {
+      throw new BadRequestException('governorateCode does not belong to regionCode');
+    }
+    return this.stationsService.create(id, String(target.companyId), {
+      name: dto.name,
+      regionCode: dto.regionCode,
+      governorateCode: dto.governorateCode,
+      location: {
+        type: 'Point',
+        coordinates: [dto.location.longitude, dto.location.latitude],
+      } as never,
+      addressText: dto.addressText,
     });
   }
 
   @Get(':id')
   async findOne(@CurrentUser() user: AuthenticatedUser, @Param('id', ObjectIdPipe) id: string) {
     if (
-      user.role !== UserRole.COMPANY_ADMIN &&
+      user.role !== UserRole.FUEL_COMPANY_ADMIN &&
+      user.role !== UserRole.TRANSPORT_COMPANY_ADMIN &&
       user.role !== UserRole.SUPER_ADMIN &&
       user.userId !== id
     ) {
       throw new ForbiddenException('May only view your own profile');
     }
-    return this.usersService.findById(id);
+    const target = await this.usersService.findById(id);
+    // spec 006 FR-002: `companyName` is the only field this endpoint adds.
+    // `companyName` is undefined for every non-DRIVER role, matching how
+    // `/auth/me`'s `station`/`creditLimit` are CLIENT-only.
+    if (target.role !== UserRole.DRIVER || !target.companyId) {
+      return target;
+    }
+    return {
+      ...target.toObject(),
+      companyName: await this.companiesService.findNameById(target.companyId),
+    };
   }
 
   /** role/companyId are immutable and never accepted here — UpdateUserDto whitelists only fullName/phone. */
@@ -99,7 +279,8 @@ export class UsersController {
     @Body() dto: UpdateUserDto,
   ) {
     if (
-      user.role !== UserRole.COMPANY_ADMIN &&
+      user.role !== UserRole.FUEL_COMPANY_ADMIN &&
+      user.role !== UserRole.TRANSPORT_COMPANY_ADMIN &&
       user.role !== UserRole.SUPER_ADMIN &&
       user.userId !== id
     ) {
@@ -108,24 +289,74 @@ export class UsersController {
     return this.usersService.update(id, dto);
   }
 
-  @Roles(UserRole.COMPANY_ADMIN)
+  // The underlying update is tenant-scoped automatically (the target's
+  // companyId must match the acting admin's own) — a FUEL_COMPANY_ADMIN
+  // activating a driver that now belongs to some Transportation Company
+  // simply finds no match (404), same as any other cross-tenant id.
+  @Roles(UserRole.FUEL_COMPANY_ADMIN, UserRole.TRANSPORT_COMPANY_ADMIN)
   @Patch(':id/activate')
   activate(@Param('id', ObjectIdPipe) id: string) {
     return this.usersService.setActive(id, true);
   }
 
-  @Roles(UserRole.COMPANY_ADMIN)
+  /**
+   * spec 006 FR-035/036/038/042: deactivation also ends the target's live
+   * session — bump + push + audit row, all in the same transaction as the
+   * deactivation itself (Principle V), same as sign-out and login's
+   * displacement of a prior session. FR-038: the driver's own busy markers
+   * are cleared (`releaseActiveOrderOnDeactivation`) so dispatch stops
+   * treating them as unavailable; the order they were carrying is left
+   * exactly as `orders.service.ts` leaves it whenever a driver is released
+   * — no new order state is invented here.
+   */
+  @Roles(UserRole.FUEL_COMPANY_ADMIN, UserRole.TRANSPORT_COMPANY_ADMIN)
   @Patch(':id/deactivate')
-  deactivate(@Param('id', ObjectIdPipe) id: string) {
-    // Deactivating a driver mid-delivery blocks NEW assignments only — their
-    // activeOrderId (if any) is left untouched so the in-progress job completes.
-    return this.usersService.setActive(id, false);
+  async deactivate(@Param('id', ObjectIdPipe) id: string) {
+    const session = await this.connection.startSession();
+    let revoked!: Awaited<ReturnType<UsersService['revokeSession']>>;
+    try {
+      await session.withTransaction(async () => {
+        await this.usersService.setActive(id, false, session);
+        revoked = await this.usersService.revokeSession(
+          id,
+          session,
+          SessionRevocationCause.ACCOUNT_DEACTIVATED,
+        );
+        await this.usersService.releaseActiveOrderOnDeactivation(id, session);
+        await this.sessionAudit.revoked(
+          {
+            userId: id,
+            companyId: revoked.companyId?.toString(),
+            role: revoked.role,
+            generation: revoked.sessionGeneration ?? 0,
+          },
+          SessionRevocationCause.ACCOUNT_DEACTIVATED,
+          session,
+        );
+      });
+    } finally {
+      await session.endSession();
+    }
+
+    this.realtimeGateway.emitToUser(id, SESSION_REVOKED_EVENT, {
+      cause: SessionRevocationCause.ACCOUNT_DEACTIVATED,
+      occurredAt: new Date().toISOString(),
+    });
+
+    return revoked;
   }
 
-  @Roles(UserRole.COMPANY_ADMIN)
-  @Patch(':id/truck')
-  updateTruck(@Param('id', ObjectIdPipe) id: string, @Body() dto: UpdateTruckDto) {
-    return this.usersService.updateTruck(id, dto);
+  // Tenant-scoped automatically (the target must be the acting admin's own
+  // client) — spec 004 FR-023: only a Fuel Company sets its clients' credit
+  // limits, never a Transportation Company or the client themselves.
+  @Roles(UserRole.FUEL_COMPANY_ADMIN)
+  @Put(':id/credit-limit')
+  async setCreditLimit(@Param('id', ObjectIdPipe) id: string, @Body() dto: SetCreditLimitDto) {
+    const target = await this.usersService.findById(id);
+    if (target.role !== UserRole.CLIENT) {
+      throw new BadRequestException('creditLimit may only be set on CLIENT accounts');
+    }
+    return this.usersService.setCreditLimit(id, dto.creditLimit);
   }
 
   /** Self-service or admin-managed avatar upload — feeds a user's profilePictureFileId. */
@@ -137,7 +368,8 @@ export class UsersController {
     @UploadedFile() file: Express.Multer.File,
   ) {
     if (
-      user.role !== UserRole.COMPANY_ADMIN &&
+      user.role !== UserRole.FUEL_COMPANY_ADMIN &&
+      user.role !== UserRole.TRANSPORT_COMPANY_ADMIN &&
       user.role !== UserRole.SUPER_ADMIN &&
       user.userId !== id
     ) {
@@ -149,13 +381,16 @@ export class UsersController {
     if (!user.companyId) {
       throw new BadRequestException('Only company-scoped users may upload files here');
     }
-    const fileRecord = await this.filesService.recordUpload({
+    // spec 012 T063: Multer now uses `memoryStorage` under every driver, so
+    // this arrives holding a buffer rather than a path to bytes already on
+    // disk. `store` writes them through the configured FileStorage and records
+    // the metadata only after they land (FR-041).
+    const fileRecord = await this.filesService.store({
       companyId: user.companyId,
       ownerUserId: id,
       purpose: FilePurpose.PROFILE_PICTURE,
-      storagePath: file.path,
+      buffer: file.buffer,
       mimeType: file.mimetype,
-      sizeBytes: file.size,
       originalName: file.originalname,
     });
     return this.usersService.update(id, { profilePictureFileId: fileRecord._id as never });

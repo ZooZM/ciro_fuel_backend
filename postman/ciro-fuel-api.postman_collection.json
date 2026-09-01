@@ -1,0 +1,4254 @@
+{
+  "info": {
+    "_postman_id": "c1r0-fu3l-4p1-c0113ct10n-0001",
+    "name": "Ciro Fuel Delivery Platform API",
+    "description": "Multi-tenant B2B fuel delivery platform — REST API (`/api/v1`). Mirrors `specs/001-fuel-delivery-platform/contracts/rest-api.md` and `scripts/smoke.http`.\n\n## How to run\n1. Import the companion environment `ciro-fuel-local.postman_environment.json` (or edit the collection variables directly) and point `baseUrl` at your running server.\n2. Make sure the platform owner is seeded: `npm run seed:super-admin` (uses `SUPER_ADMIN_EMAIL` / `SUPER_ADMIN_PASSWORD` from `.env`) — update the `superAdminEmail` / `superAdminPassword` variables to match.\n3. Run the **Auth → Login – Super Admin** request first.\n4. Run **Companies → Create Company** (`commercialRegister` is optional — attach a small PDF/image if you want to test it) — this seeds a Fuel Company Admin too. Then **Companies → Set Fuel Prices** (order creation 400s without it).\n5. Run **Auth → Login – Fuel Admin**, then **Users → Create Client** and **Companies → Create Transporter** — a Transportation Company is a separate tenant, spec 004; a driver belongs to it, not to the fuel company.\n6. Run **Companies → Assign Regions** so the transporter actually serves the client's region, or approval will park the order at `AWAITING_ROUTING` with no candidates. Then **Users → Create Driver** (under the transport company) and **Auth → Login – Transport Admin**.\n7. Run **Auth → Login – Client** / **Auth → Login – Driver** — these sign in with `phone`, not email (see the note below).\n8. spec 008 fleet setup, once per transporter: **Trucks → Create Truck** + **Pair NFC Card** (or **Mint QR Token**), and **Tanks → Create Tank**. **Warehouses → Create Warehouse** (SUPER_ADMIN) near the delivery coordinates you'll use — **Dispatch → Assign Driver** fails with `NO_WAREHOUSE_FOR_GRADE` without one that supplies the order's grade.\n9. Walk the **Orders** folder top to bottom for the full lifecycle: create → approve → pay (**Payments → Webhook – Sadad**, if `DIRECT`) → **Dispatch → Get Candidates**/**Assign Driver** → **Verify Vehicle – Departure** → **Verify Vehicle – Loading (Geofenced)** → **Confirm Loading** → **Driver Arrive** → **Get Current OTP** (as CLIENT) → **Verify Arrival OTP** → **Request Delivery OTP** → **Get Current OTP** again → **Verify Delivery OTP**.\n\n## Login identifiers\n`POST /auth/login` takes **one** of two identifiers:\n\n| Role | Identifier | Variable |\n|------|-----------|----------|\n| SUPER_ADMIN, COMPANY_ADMIN | `email` | `superAdminEmail`, `companyAdminEmail` |\n| CLIENT, DRIVER | `phone` (E.164, e.g. `+9665XXXXXXX`) | `clientPhone`, `driverPhone` |\n\nA CLIENT/DRIVER phone is unique platform-wide because it *is* their credential: creating or updating a user with a non-E.164 phone returns `400`, and reusing one returns `409`. Admin phones are never resolved at login, so sending an admin's phone returns `401`.\n\nEach login request captures its token into a role-specific variable (`accessTokenSuperAdmin`, `accessTokenCompanyAdmin`, `accessTokenClient`, `accessTokenDriver`) plus a generic `accessToken`/`refreshToken` pair (whichever logged in most recently). Requests use the role-specific variable that actually owns that route, so folders can be run out of order as long as the relevant login already ran once.\n\nCross-tenant or wrong-role access returns `404`/`403` per `rest-api.md` — that's expected, not a bug, if you mix up which token a request uses.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{accessToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "event": [],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000/api/v1",
+      "type": "string"
+    },
+    {
+      "key": "superAdminEmail",
+      "value": "owner@example.com",
+      "type": "string"
+    },
+    {
+      "key": "superAdminPassword",
+      "value": "change-me-please-16chars",
+      "type": "string"
+    },
+    {
+      "key": "companyName",
+      "value": "Smoke Test Logistics",
+      "type": "string"
+    },
+    {
+      "key": "contactEmail",
+      "value": "contact@smoketest.example",
+      "type": "string"
+    },
+    {
+      "key": "contactPhone",
+      "value": "+966500000000",
+      "type": "string"
+    },
+    {
+      "key": "companyAdminEmail",
+      "value": "admin@smoketest.example",
+      "type": "string"
+    },
+    {
+      "key": "companyAdminFullName",
+      "value": "Smoke Admin",
+      "type": "string"
+    },
+    {
+      "key": "companyAdminPhone",
+      "value": "+966500000001",
+      "type": "string"
+    },
+    {
+      "key": "companyAdminPassword",
+      "value": "Password123!",
+      "type": "string"
+    },
+    {
+      "key": "clientEmail",
+      "value": "client@smoketest.example",
+      "type": "string"
+    },
+    {
+      "key": "clientPassword",
+      "value": "Password123!",
+      "type": "string"
+    },
+    {
+      "key": "clientFullName",
+      "value": "Smoke Client",
+      "type": "string"
+    },
+    {
+      "key": "clientPhone",
+      "value": "+966500000002",
+      "type": "string"
+    },
+    {
+      "key": "clientPhoneUpdated",
+      "value": "+966500000042",
+      "type": "string"
+    },
+    {
+      "key": "driverEmail",
+      "value": "driver@smoketest.example",
+      "type": "string"
+    },
+    {
+      "key": "driverPassword",
+      "value": "Password123!",
+      "type": "string"
+    },
+    {
+      "key": "driverFullName",
+      "value": "Smoke Driver",
+      "type": "string"
+    },
+    {
+      "key": "driverPhone",
+      "value": "+966500000003",
+      "type": "string"
+    },
+    {
+      "key": "accessToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "refreshToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "accessTokenSuperAdmin",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "refreshTokenSuperAdmin",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "accessTokenCompanyAdmin",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "refreshTokenCompanyAdmin",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "accessTokenClient",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "refreshTokenClient",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "accessTokenDriver",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "refreshTokenDriver",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "companyId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "adminUserId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "clientId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "driverId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "orderId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "orderFinalPrice",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "currentOtp",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "fileId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "notificationId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "paymentSadadSecret",
+      "value": "change-me",
+      "type": "string"
+    },
+    {
+      "key": "paymentMadaSecret",
+      "value": "change-me",
+      "type": "string"
+    },
+    {
+      "key": "webhookRawBody",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "computedSignature",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "transportCompanyName",
+      "value": "Smoke Test Transport",
+      "type": "string"
+    },
+    {
+      "key": "transportContactEmail",
+      "value": "transport@smoketest.example",
+      "type": "string"
+    },
+    {
+      "key": "transportContactPhone",
+      "value": "+966500000010",
+      "type": "string"
+    },
+    {
+      "key": "transportAdminEmail",
+      "value": "transportadmin@smoketest.example",
+      "type": "string"
+    },
+    {
+      "key": "transportAdminFullName",
+      "value": "Smoke Transport Admin",
+      "type": "string"
+    },
+    {
+      "key": "transportAdminPhone",
+      "value": "+966500000011",
+      "type": "string"
+    },
+    {
+      "key": "transportAdminPassword",
+      "value": "Password123!",
+      "type": "string"
+    },
+    {
+      "key": "transportCompanyId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "transportAdminUserId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "accessTokenTransportAdmin",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "refreshTokenTransportAdmin",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "regionCode",
+      "value": "RIYADH",
+      "type": "string"
+    },
+    {
+      "key": "governorateCode",
+      "value": "RIYADH_CITY",
+      "type": "string"
+    },
+    {
+      "key": "creditLimit",
+      "value": "1000",
+      "type": "string"
+    },
+    {
+      "key": "invoiceId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "stationId",
+      "value": "",
+      "description": "Set by Stations → List My Stations / Create Client Station."
+    },
+    {
+      "key": "quoteToken",
+      "value": "",
+      "description": "Set by Orders → Quote Order; consumed by Create Order (quoted)."
+    },
+    {
+      "key": "supportRequestId",
+      "value": "",
+      "description": "Set by Support → Raise Support Request."
+    },
+    {
+      "key": "clientPhoneNew",
+      "value": "+966500000099",
+      "description": "Target number for the phone-change verification flow."
+    },
+    {
+      "key": "phoneVerificationCode",
+      "value": "",
+      "description": "The 6-digit SMS code. Never returned by the API (FR-035g) — read it from the provider, or the no-op sender log when SMS_PROVIDER=none."
+    },
+    {
+      "key": "truckId",
+      "value": "",
+      "description": "Set by Trucks → Create Truck; consumed by Dispatch → Assign Driver and Orders → Reassign Vehicle."
+    },
+    {
+      "key": "tankId",
+      "value": "",
+      "description": "Set by Tanks → Create Tank; consumed by Dispatch → Assign Driver and Orders → Reassign Vehicle."
+    },
+    {
+      "key": "warehouseId",
+      "value": "",
+      "description": "Set by Warehouses → Create Warehouse."
+    },
+    {
+      "key": "nfcCardUid",
+      "value": "CARD-DEMO-0001",
+      "description": "A synthetic card identifier for testing — pair it to a truck via Trucks → Pair NFC Card before using it in Orders → Verify Vehicle."
+    },
+    {
+      "key": "qrToken",
+      "value": "",
+      "description": "Set by Trucks → Mint/Rotate QR Token — the one-time-visible alternative credential (FR-042)."
+    }
+  ],
+  "item": [
+    {
+      "name": "Auth",
+      "item": [
+        {
+          "name": "Login – Super Admin",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{superAdminEmail}}\",\n  \"password\": \"{{superAdminPassword}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "[public] 10/min. Requires the seeded platform owner (`npm run seed:super-admin`).\n\nAdmin roles sign in with **email**. Phone login is reserved for CLIENT/DRIVER, so sending this account's phone here returns 401."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Login succeeded', () => pm.response.to.be.success);",
+                  "const data = pm.response.json();",
+                  "pm.collectionVariables.set('accessTokenSuperAdmin', data.accessToken);",
+                  "pm.collectionVariables.set('refreshTokenSuperAdmin', data.refreshToken);",
+                  "pm.collectionVariables.set('accessToken', data.accessToken);",
+                  "pm.collectionVariables.set('refreshToken', data.refreshToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login – Fuel Admin",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{companyAdminEmail}}\",\n  \"password\": \"{{companyAdminPassword}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "[public] Run **Companies → Create Company** first so this account exists.\n\nAdmin roles sign in with **email**. Phone login is reserved for CLIENT/DRIVER, so sending this account's phone here returns 401.\n\nThis is the FUEL_COMPANY_ADMIN created alongside the Fuel Company (spec 004 — COMPANY_ADMIN's direct successor)."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Login succeeded', () => pm.response.to.be.success);",
+                  "const data = pm.response.json();",
+                  "pm.collectionVariables.set('accessTokenCompanyAdmin', data.accessToken);",
+                  "pm.collectionVariables.set('refreshTokenCompanyAdmin', data.refreshToken);",
+                  "pm.collectionVariables.set('accessToken', data.accessToken);",
+                  "pm.collectionVariables.set('refreshToken', data.refreshToken);",
+                  "if (data.user && data.user.id) pm.collectionVariables.set('adminUserId', data.user.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login – Transport Admin",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{transportAdminEmail}}\",\n  \"password\": \"{{transportAdminPassword}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "[public] Run **Companies → Create Transporter** first so this account exists.\n\nTRANSPORT_COMPANY_ADMIN — owns a driver fleet, picks up orders routed to its company (spec 004 US2/US4)."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Login succeeded', () => pm.response.to.be.success);",
+                  "const data = pm.response.json();",
+                  "pm.collectionVariables.set('accessTokenTransportAdmin', data.accessToken);",
+                  "pm.collectionVariables.set('refreshTokenTransportAdmin', data.refreshToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login – Client",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"{{clientPhone}}\",\n  \"password\": \"{{clientPassword}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "CLIENT signs in with **phone**, not email — phone is the login identifier for CLIENT/DRIVER and must be E.164 (`+9665XXXXXXX`). Email is reserved for the SUPER_ADMIN / COMPANY_ADMIN dashboard logins. An admin phone is never resolved here, so it returns 401."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Login succeeded', () => pm.response.to.be.success);",
+                  "const data = pm.response.json();",
+                  "pm.test('role is CLIENT', () => pm.expect(data.user.role).to.eql('CLIENT'));",
+                  "pm.collectionVariables.set('accessTokenClient', data.accessToken);",
+                  "pm.collectionVariables.set('refreshTokenClient', data.refreshToken);",
+                  "pm.collectionVariables.set('accessToken', data.accessToken);",
+                  "pm.collectionVariables.set('refreshToken', data.refreshToken);",
+                  "if (data.user && data.user.id) pm.collectionVariables.set('clientId', data.user.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login – Driver",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"{{driverPhone}}\",\n  \"password\": \"{{driverPassword}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login"
+              ]
+            },
+            "description": "DRIVER signs in with **phone** (E.164), same rule as the client. Deactivated accounts and suspended companies return the same generic 401 as bad credentials."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Login succeeded', () => pm.response.to.be.success);",
+                  "const data = pm.response.json();",
+                  "pm.test('role is DRIVER', () => pm.expect(data.user.role).to.eql('DRIVER'));",
+                  "pm.collectionVariables.set('accessTokenDriver', data.accessToken);",
+                  "pm.collectionVariables.set('refreshTokenDriver', data.refreshToken);",
+                  "pm.collectionVariables.set('accessToken', data.accessToken);",
+                  "pm.collectionVariables.set('refreshToken', data.refreshToken);",
+                  "if (data.user && data.user.id) pm.collectionVariables.set('driverId', data.user.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Refresh Token",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"refreshToken\": \"{{refreshToken}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/refresh",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "refresh"
+              ]
+            },
+            "description": "[public] Rotates the generic `accessToken`/`refreshToken` pair (whichever role logged in most recently)."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Refresh succeeded', () => pm.response.to.be.success);",
+                  "const data = pm.response.json();",
+                  "pm.collectionVariables.set('accessToken', data.accessToken);",
+                  "pm.collectionVariables.set('refreshToken', data.refreshToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Me",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/auth/me",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "me"
+              ]
+            },
+            "description": "Current user profile for whichever role last logged in (`{{accessToken}}`)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Regions",
+      "item": [
+        {
+          "name": "List Regions",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/regions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "regions"
+              ]
+            },
+            "description": "[public] The 13 Saudi regions and their governorates (Arabic/English names) — reference data for `Company.servedRegions` and `User.station.regionCode` (spec 004 FR-010)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Companies",
+      "item": [
+        {
+          "name": "Create Company",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenSuperAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "name",
+                  "value": "{{companyName}}",
+                  "type": "text"
+                },
+                {
+                  "key": "contactEmail",
+                  "value": "{{contactEmail}}",
+                  "type": "text"
+                },
+                {
+                  "key": "contactPhone",
+                  "value": "{{contactPhone}}",
+                  "type": "text"
+                },
+                {
+                  "key": "adminEmail",
+                  "value": "{{companyAdminEmail}}",
+                  "type": "text"
+                },
+                {
+                  "key": "adminFullName",
+                  "value": "{{companyAdminFullName}}",
+                  "type": "text"
+                },
+                {
+                  "key": "adminPhone",
+                  "value": "{{companyAdminPhone}}",
+                  "type": "text"
+                },
+                {
+                  "key": "adminPassword",
+                  "value": "{{companyAdminPassword}}",
+                  "type": "text"
+                },
+                {
+                  "key": "commercialRegister",
+                  "type": "file",
+                  "src": [],
+                  "disabled": true,
+                  "description": "Optional. Any PDF/JPEG/PNG under 10MB — see files.constants.ts for the MIME allowlist. Leave unattached (or disable this field) to create the company without a commercial register file."
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/companies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "companies"
+              ]
+            },
+            "description": "SUPER_ADMIN. Multipart. Creates the tenant + its first Company Admin in one call (FR-018). `commercialRegister` is optional — enable the field and select a file (e.g. `scripts/fixtures/sample-register.pdf`) to attach one, or leave it disabled to create the company without it."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Company created', () => pm.response.to.be.success);",
+                  "const data = pm.response.json();",
+                  "if (data.company && data.company._id) pm.collectionVariables.set('companyId', data.company._id);",
+                  "if (data.admin && data.admin.id) pm.collectionVariables.set('adminUserId', data.admin.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Companies",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenSuperAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/companies",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "companies"
+              ]
+            },
+            "description": "SUPER_ADMIN."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Company by ID",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenSuperAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/companies/{{companyId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "companies",
+                "{{companyId}}"
+              ]
+            },
+            "description": "SUPER_ADMIN, or that company's own COMPANY_ADMIN."
+          },
+          "response": []
+        },
+        {
+          "name": "Update Company Status",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenSuperAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"ACTIVE\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/companies/{{companyId}}/status",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "companies",
+                "{{companyId}}",
+                "status"
+              ]
+            },
+            "description": "SUPER_ADMIN. `status` is `ACTIVE` or `SUSPENDED`. A suspended company's users get `401` on login/refresh."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Fuel Prices",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenCompanyAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/companies/{{companyId}}/fuel-prices",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "companies",
+                "{{companyId}}",
+                "fuel-prices"
+              ]
+            },
+            "description": "Own COMPANY_ADMIN or own CLIENT."
+          },
+          "response": []
+        },
+        {
+          "name": "Set Fuel Prices",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenCompanyAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"prices\": [\n    { \"fuelType\": \"DIESEL\", \"basePricePerLiter\": 2.5 },\n    { \"fuelType\": \"PETROL_91\", \"basePricePerLiter\": 2.18 },\n    { \"fuelType\": \"PETROL_95\", \"basePricePerLiter\": 2.33 },\n    { \"fuelType\": \"KEROSENE\", \"basePricePerLiter\": 1.85 }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/companies/{{companyId}}/fuel-prices",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "companies",
+                "{{companyId}}",
+                "fuel-prices"
+              ]
+            },
+            "description": "Own COMPANY_ADMIN (FR-008a). Run this before creating orders so `estimatedPrice` can be computed."
+          },
+          "response": []
+        },
+        {
+          "name": "Create Transporter",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenCompanyAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"{{transportCompanyName}}\",\n  \"contactEmail\": \"{{transportContactEmail}}\",\n  \"contactPhone\": \"{{transportContactPhone}}\",\n  \"adminEmail\": \"{{transportAdminEmail}}\",\n  \"adminFullName\": \"{{transportAdminFullName}}\",\n  \"adminPhone\": \"{{transportAdminPhone}}\",\n  \"adminPassword\": \"{{transportAdminPassword}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/companies/{{companyId}}/transporters",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "companies",
+                "{{companyId}}",
+                "transporters"
+              ]
+            },
+            "description": "FUEL_COMPANY_ADMIN (own company). Creates a `type: TRANSPORT` company under `:companyId` plus its TRANSPORT_COMPANY_ADMIN in one call (spec 004 US2). Run **Auth → Login – Fuel Admin** first."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Transporter created', () => pm.response.to.be.success);",
+                  "const data = pm.response.json();",
+                  "if (data.company && data.company._id) pm.collectionVariables.set('transportCompanyId', data.company._id);",
+                  "if (data.admin && data.admin.id) pm.collectionVariables.set('transportAdminUserId', data.admin.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Assign Regions",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenCompanyAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"regionCodes\": [\"{{regionCode}}\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/companies/{{transportCompanyId}}/regions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "companies",
+                "{{transportCompanyId}}",
+                "regions"
+              ]
+            },
+            "description": "FUEL_COMPANY_ADMIN (owning the transporter at `:id`). Replaces `servedRegions` wholesale — drives routing (spec 004 FR-014/FR-015/FR-016). Run **Companies → Create Transporter** first."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Pricing Config",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenClient}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/companies/{{companyId}}/pricing-config",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "companies",
+                "{{companyId}}",
+                "pricing-config"
+              ]
+            },
+            "description": "Any authenticated caller whose own company this is (`assertCompanyAccess`) — a CLIENT reads their own fuel company's configuration to price the quote screen; only a FUEL_COMPANY_ADMIN may set it (spec 005 T053).\n\nReturns `deliveryFee`, `serviceFeePercent`, `taxRatePercent` and `tankerCapacitiesLiters` — the ladder the client's quantity selector steps through (FR-017).\n\n**409 `PRICING_NOT_CONFIGURED`** when the company has no configuration. FR-011j: an unconfigured company must fail loudly rather than return an empty body the client cannot distinguish from a malformed response."
+          },
+          "response": []
+        },
+        {
+          "name": "Set Pricing Config",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenCompanyAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"deliveryFee\": 50,\n  \"serviceFeePercent\": 2.5,\n  \"taxRatePercent\": 15,\n  \"tankerCapacitiesLiters\": [\n    5000,\n    10000,\n    20000,\n    30000\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/companies/{{companyId}}/pricing-config",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "companies",
+                "{{companyId}}",
+                "pricing-config"
+              ]
+            },
+            "description": "FUEL_COMPANY_ADMIN. The single authority behind every itemised breakdown (spec 005 D3/FR-011f).\n\n`tankerCapacitiesLiters` must be non-empty and **strictly ascending** — the client's quantity ladder is rendered in exactly this order (FR-017). It comes from the fuel company's own configuration, never from transport companies' `Truck.maxCapacityLiters`, which would cross a tenant boundary (FR-017a).\n\nA change here never rewrites an order already priced (FR-011i)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Users",
+      "item": [
+        {
+          "name": "Create Client",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenCompanyAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"role\": \"CLIENT\",\n  \"email\": \"{{clientEmail}}\",\n  \"password\": \"{{clientPassword}}\",\n  \"fullName\": \"{{clientFullName}}\",\n  \"phone\": \"{{clientPhone}}\",\n  \"station\": {\n    \"regionCode\": \"{{regionCode}}\",\n    \"governorateCode\": \"{{governorateCode}}\",\n    \"location\": { \"longitude\": 46.6753, \"latitude\": 24.7136 },\n    \"addressText\": \"\",\n    \"name\": \"Smoke Test Station\"\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/users",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users"
+              ]
+            },
+            "description": "FUEL_COMPANY_ADMIN. `station{regionCode, governorateCode, location}` required for CLIENT accounts (spec 004 FR-010/FR-011) — `governorateCode` must belong to `regionCode` (see **Regions → List Regions**). `addressText`/`name` are optional (FR-013).\n\n`phone` MUST be E.164 (`+9665XXXXXXX`) and is unique platform-wide for CLIENT/DRIVER because it is their login credential:\n- non-E.164 → `400`\n- already registered → `409`\n\nAfter this runs, **Auth → Login – Client** can sign in with the same `{{clientPhone}}`."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Client created', () => pm.response.to.be.success);",
+                  "const data = pm.response.json();",
+                  "if (data._id) pm.collectionVariables.set('clientId', data._id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Driver",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenTransportAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"role\": \"DRIVER\",\n  \"email\": \"{{driverEmail}}\",\n  \"password\": \"{{driverPassword}}\",\n  \"fullName\": \"{{driverFullName}}\",\n  \"phone\": \"{{driverPhone}}\",\n  \"truck\": { \"plateNumber\": \"SMK-1\", \"maxCapacityLiters\": 5000, \"fuelTypes\": [\"DIESEL\"] }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/users",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users"
+              ]
+            },
+            "description": "TRANSPORT_COMPANY_ADMIN. `truck` required for DRIVER accounts — capabilities are denormalized onto the driver doc (R8). The fleet belongs exclusively to the transporter (spec 004 FR-004a's symmetric counterpart — a Fuel Company can no longer create drivers).\n\n`phone` MUST be E.164 and unique platform-wide (it is the login credential): non-E.164 → `400`, already registered → `409`.\n\nRun **Auth → Login – Transport Admin** first."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Driver created', () => pm.response.to.be.success);",
+                  "const data = pm.response.json();",
+                  "if (data._id) pm.collectionVariables.set('driverId', data._id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Client – Duplicate Phone (409)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenCompanyAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"role\": \"CLIENT\",\n  \"email\": \"duplicate-phone-{{$timestamp}}@smoketest.example\",\n  \"password\": \"{{clientPassword}}\",\n  \"fullName\": \"Duplicate Phone Probe\",\n  \"phone\": \"{{clientPhone}}\",\n  \"stationLocation\": { \"longitude\": 46.6753, \"latitude\": 24.7136 }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/users",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users"
+              ]
+            },
+            "description": "Negative case: reuses `{{clientPhone}}` with a fresh email. Phone is unique platform-wide for CLIENT/DRIVER, so this must return `409 Conflict` — it used to surface as a `500`. Run **Create Client** first."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('rejected with 409 Conflict', () => pm.response.to.have.status(409));",
+                  "pm.test('names the clashing field', () => pm.expect(pm.response.json().message).to.match(/phone/i));",
+                  "// Must not be a 500 — a duplicate credential is a client error.",
+                  "pm.test('not a server error', () => pm.expect(pm.response.code).to.be.below(500));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Users",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenCompanyAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/users",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users"
+              ],
+              "query": [
+                {
+                  "key": "role",
+                  "value": "",
+                  "description": "CLIENT | DRIVER | COMPANY_ADMIN — omit or leave empty for all",
+                  "disabled": true
+                },
+                {
+                  "key": "isActive",
+                  "value": "",
+                  "description": "true | false — omit or leave empty for all",
+                  "disabled": true
+                },
+                {
+                  "key": "page",
+                  "value": "1",
+                  "disabled": true
+                }
+              ]
+            },
+            "description": "COMPANY_ADMIN, SUPER_ADMIN. Tenant-filtered automatically — a COMPANY_ADMIN only ever sees their own company's users.\n\nFilters are optional and are enabled/disabled per param above. An empty value (`?role=`) counts as \"no filter\" rather than matching nothing."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('List returned', () => pm.response.to.be.success);",
+                  "const data = pm.response.json();",
+                  "pm.test('unfiltered list is not empty', () => pm.expect(data).to.be.an('array').that.is.not.empty);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get User by ID",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenCompanyAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/users/{{clientId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{clientId}}"
+              ]
+            },
+            "description": "COMPANY_ADMIN, SUPER_ADMIN, or the user themself."
+          },
+          "response": []
+        },
+        {
+          "name": "Update User",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenCompanyAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fullName\": \"Smoke Client Updated\",\n  \"phone\": \"{{clientPhoneUpdated}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/users/{{clientId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{clientId}}"
+              ]
+            },
+            "description": "COMPANY_ADMIN, SUPER_ADMIN, or self (limited fields). `role`/`companyId` are immutable — only `fullName`/`phone` are whitelisted.\n\n`phone` is re-validated here exactly as on create (non-E.164 → `400`, already registered → `409`) because for a CLIENT/DRIVER it **is** the login credential — an unchecked edit would lock the account out.\n\nThe test below copies the new number into `clientPhone`, so **Auth → Login – Client** keeps working after this request rotates it."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('User updated', () => pm.response.to.be.success);",
+                  "const data = pm.response.json();",
+                  "pm.test('phone was rotated', () => pm.expect(data.phone).to.eql(pm.collectionVariables.get('clientPhoneUpdated')));",
+                  "// Phone is the login identifier — keep Login – Client runnable after the rotation.",
+                  "pm.collectionVariables.set('clientPhone', data.phone);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Activate User",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenCompanyAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/users/{{driverId}}/activate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{driverId}}",
+                "activate"
+              ]
+            },
+            "description": "COMPANY_ADMIN."
+          },
+          "response": []
+        },
+        {
+          "name": "Deactivate User",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenCompanyAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/users/{{driverId}}/deactivate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{driverId}}",
+                "deactivate"
+              ]
+            },
+            "description": "COMPANY_ADMIN. Deactivating a driver mid-delivery blocks NEW assignments only — their active order still completes."
+          },
+          "response": []
+        },
+        {
+          "name": "Upload Profile Picture",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenCompanyAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": [],
+                  "description": "JPEG/PNG image."
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/users/{{clientId}}/profile-picture",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{clientId}}",
+                "profile-picture"
+              ]
+            },
+            "description": "COMPANY_ADMIN, SUPER_ADMIN, or self. Select an image for `file` before sending."
+          },
+          "response": []
+        },
+        {
+          "name": "Set Credit Limit",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenCompanyAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"creditLimit\": {{creditLimit}}\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/users/{{clientId}}/credit-limit",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{clientId}}",
+                "credit-limit"
+              ]
+            },
+            "description": "FUEL_COMPANY_ADMIN (own client). Sets the client's CREDIT-method ceiling (spec 004 FR-023) — available credit is always derived as `creditLimit − Σ(outstanding ISSUED credit invoices)`, never a separately mutated counter (FR-024a). Target must be a CLIENT."
+          },
+          "response": []
+        },
+        {
+          "name": "Get My Credit Standing",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenClient}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/users/me/credit",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "me",
+                "credit"
+              ]
+            },
+            "description": "CLIENT (spec 005 T081/US5). Returns `creditLimit`, `consumed` and `available`, computed live from the same calculation the order path uses to refuse an over-limit order — the dashboard and the credit screen therefore cannot disagree (FR-026).\n\n`creditLimit: null` means no facility is assigned; the client is told so rather than shown a figure (FR-027). Nothing is stored (research R6)."
+          },
+          "response": []
+        },
+        {
+          "name": "Request Phone Verification",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenClient}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"newPhone\": \"{{clientPhoneNew}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/users/me/phone/verification",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "me",
+                "phone",
+                "verification"
+              ]
+            },
+            "description": "CLIENT (spec 005 T097/US7). **202** once the code is dispatched by SMS to the **new** number — never the existing one, so possession of the new number is what gets proven (FR-035b).\n\nThe phone is *not* changed yet: it stays as it was until the code is confirmed, and an abandoned or expired verification leaves the original in force (FR-035c).\n\nThrottled to **3 requests / 15 min per user** (429 with `retryAfterSeconds`). A number already registered elsewhere yields **409 `PHONE_IN_USE`** and no SMS is sent (FR-035e). A provider failure yields **502 `SMS_SEND_FAILED`** rather than a false 202 (FR-035f).\n\nThe code is never returned in any response, logged, or displayed (FR-035g) — read it from the SMS provider, or from the `SmsSender` no-op's log line when `SMS_PROVIDER=none`."
+          },
+          "response": []
+        },
+        {
+          "name": "Confirm Phone Verification",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenClient}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"{{phoneVerificationCode}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/users/me/phone/verification/confirm",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "me",
+                "phone",
+                "verification",
+                "confirm"
+              ]
+            },
+            "description": "CLIENT. Exactly 6 digits. The change takes effect only on a correct code (FR-035). Hashed at rest, single-use, expiring, and limited to **5 attempts per code** — a locked-out attempt surfaces as 429."
+          },
+          "response": []
+        },
+        {
+          "name": "List Client Stations (Admin)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenCompanyAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/users/{{clientId}}/stations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{clientId}}",
+                "stations"
+              ]
+            },
+            "description": "FUEL_COMPANY_ADMIN (spec 005 T108). Every station registered to that client, including inactive ones.\n\nNested under `/users` because the client owns the set. `findById` is itself tenant-scoped, so a foreign or nonexistent id 404s before any station work happens."
+          },
+          "response": []
+        },
+        {
+          "name": "Create Client Station (Admin)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenCompanyAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Riyadh Depot — North\",\n  \"regionCode\": \"{{regionCode}}\",\n  \"governorateCode\": \"{{governorateCode}}\",\n  \"location\": {\n    \"latitude\": 24.7742,\n    \"longitude\": 46.7386\n  },\n  \"addressText\": \"Al Olaya, Riyadh\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/users/{{clientId}}/stations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users",
+                "{{clientId}}",
+                "stations"
+              ]
+            },
+            "description": "FUEL_COMPANY_ADMIN. Registering a station is the fuel company's responsibility — a CLIENT can never create, rename or remove one (FR-036b), and the app offers no control implying otherwise.\n\nA client may hold several (D2/FR-036); the first becomes the default. `governorateCode` must belong to `regionCode` or the call is a 400.\n\nA newly registered station appears for the client without an app update (FR-036c)."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Station created', () => pm.response.to.be.success);",
+                  "const data = pm.response.json();",
+                  "if (data._id) pm.collectionVariables.set('stationId', data._id);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Geocoding",
+      "item": [
+        {
+          "name": "Reverse Geocode",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenCompanyAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"lat\": 24.7136,\n  \"lng\": 46.6753\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/geocoding/reverse",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "geocoding",
+                "reverse"
+              ]
+            },
+            "description": "FUEL_COMPANY_ADMIN. Suggests an address for a dropped pin at client registration (spec 004 FR-011) — never final, never re-derived on a later read (FR-012/013). Never throws: a missing API key, network failure or empty result all return `{ addressText: '' }`. The only external address-lookup call in the platform — order reads never make one (SC-007)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Orders",
+      "item": [
+        {
+          "name": "Create Order",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenClient}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fuelType\": \"DIESEL\",\n  \"quantityLiters\": 500,\n  \"paymentMethod\": \"DIRECT\",\n  \"deliveryLocation\": {\n    \"longitude\": 46.6753,\n    \"latitude\": 24.7136\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders"
+              ]
+            },
+            "description": "CLIENT. 201 with `status: PENDING_APPROVAL` and computed `estimatedPrice` (FR-007/008a). Requires fuel prices to already be set for the company (**Companies → Set Fuel Prices**).\n\n`deliveryLocation` is optional — omit it to fall back to the client's own station location, or pass raw coordinates directly (as here) to create an order with **no station at all**, e.g. for a one-off manual test. `paymentMethod` (spec 004 FR-021) is one of `DIRECT` (default — the client pays, via **Payments (Webhooks)**), `DEFERRED` (the Transportation Company pays) or `CREDIT` (drawn against `creditLimit` — see **Users → Set Credit Limit**)."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Order created', () => pm.response.to.be.success);",
+                  "const data = pm.response.json();",
+                  "if (data._id) pm.collectionVariables.set('orderId', data._id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Orders",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenClient}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/orders?status=",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders"
+              ],
+              "query": [
+                {
+                  "key": "status",
+                  "value": "",
+                  "description": "e.g. PENDING_APPROVAL, APPROVED, IN_TRANSIT..."
+                }
+              ]
+            },
+            "description": "Any role, scoped automatically: CLIENT→own, DRIVER→assigned, COMPANY_ADMIN→company, SUPER_ADMIN→all. Swap the bearer token to see each scope."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Order by ID",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenCompanyAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/orders/{{orderId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders",
+                "{{orderId}}"
+              ]
+            },
+            "description": "Includes `statusHistory`. Driver DTO never includes `otps`.\n\nspec 008: also returns `truckId`/`tankSummary`/`warehouseSummary`/`verifications[]` once a driver is assigned — `verifications`/`tankSummary` are stripped for CLIENT (FR-042); every role instead sees `vehicleVerified` (true only for a genuine matched DEPARTURE verification, never an override — FR-047d)."
+          },
+          "response": []
+        },
+        {
+          "name": "Approve Order",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenCompanyAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/orders/{{orderId}}/approve",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders",
+                "{{orderId}}",
+                "approve"
+              ]
+            },
+            "description": "FUEL_COMPANY_ADMIN. Optional `{ finalPrice?, transportCompanyId? }` — omitted `finalPrice` ⇒ `finalPrice = estimatedPrice`. Issues the order's invoice using `finalPrice` (spec 004 FR-020) — a CREDIT order over the client's available credit is refused (400, no invoice issued, FR-025). A DIRECT order then goes to `PENDING_PAYMENT` (routing deferred until settlement, FR-020a); DEFERRED/CREDIT route immediately — one serving transporter ⇒ `ROUTED_TO_TRANSPORT`; none ⇒ `AWAITING_ROUTING` + notified (FR-016); several ⇒ `AWAITING_ROUTING` with `routingCandidates` in the response unless `transportCompanyId` was supplied (FR-014)."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Order approved', () => pm.response.to.be.success);",
+                  "const data = pm.response.json();",
+                  "if (data.finalPrice !== undefined) pm.collectionVariables.set('orderFinalPrice', String(data.finalPrice));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Route Order",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenCompanyAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"transportCompanyId\": \"{{transportCompanyId}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/orders/{{orderId}}/route",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders",
+                "{{orderId}}",
+                "route"
+              ]
+            },
+            "description": "FUEL_COMPANY_ADMIN. Resolves an `AWAITING_ROUTING` order manually (spec 004 FR-014's Fuel-Company choice among several candidates, or FR-016's later resolution once a transporter gains region coverage). `409` if the order isn't `AWAITING_ROUTING`; `400` if the choice doesn't actually serve the region."
+          },
+          "response": []
+        },
+        {
+          "name": "Reject Order",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenCompanyAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Insufficient supporting documentation\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/orders/{{orderId}}/reject",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders",
+                "{{orderId}}",
+                "reject"
+              ]
+            },
+            "description": "COMPANY_ADMIN. Alternate path from `PENDING_APPROVAL` — only run this against a fresh order that hasn't already been approved (409 otherwise)."
+          },
+          "response": []
+        },
+        {
+          "name": "Cancel Order",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenClient}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Changed my mind\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/orders/{{orderId}}/cancel",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders",
+                "{{orderId}}",
+                "cancel"
+              ]
+            },
+            "description": "CLIENT (while PENDING_APPROVAL/APPROVED/PENDING_PAYMENT) or COMPANY_ADMIN (until IN_TRANSIT). Releases the driver and clears any payment-timeout job transactionally (FR-009)."
+          },
+          "response": []
+        },
+        {
+          "name": "Redispatch Order",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenCompanyAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/orders/{{orderId}}/redispatch",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders",
+                "{{orderId}}",
+                "redispatch"
+              ]
+            },
+            "description": "COMPANY_ADMIN, or CLIENT (blocked once `paymentTimeoutCount >= 2`, FR-015a). Only valid from `APPROVED` after a payment timeout."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Current OTP",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenClient}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/orders/{{orderId}}/otp/current",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders",
+                "{{orderId}}",
+                "otp",
+                "current"
+              ]
+            },
+            "description": "CLIENT (order owner) only. The ONLY route where plaintext OTP appears (FR-021/022). Run after **Driver Arrive** or **Request Delivery OTP**."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('OTP fetched', () => pm.response.to.be.success);",
+                  "const data = pm.response.json();",
+                  "if (data.otp) pm.collectionVariables.set('currentOtp', data.otp);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Verify Vehicle – Departure",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenDriver}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"credential\": \"{{nfcCardUid}}\",\n  \"method\": \"NFC_CARD\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/orders/{{orderId}}/verify-vehicle",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders",
+                "{{orderId}}",
+                "verify-vehicle"
+              ]
+            },
+            "description": "spec 008 US3 (5/15min throttled). One endpoint for both stages — which one is derived from the order's own status, never from the request (research R7). At `ASSIGNED_TO_DRIVER` this is the DEPARTURE check: on match, advances to `LOADING` and returns `warehouseSummary` — that's the next destination (FR-026). `method` is `NFC_CARD` or `QR_CODE` (use `{{qrToken}}` as the credential for the latter). `403 VEHICLE_MISMATCH` — deliberately the SAME code whether the credential is wrong or simply unknown (Principle II)."
+          },
+          "response": []
+        },
+        {
+          "name": "Verify Vehicle – Loading (Geofenced)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenDriver}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"credential\": \"{{nfcCardUid}}\",\n  \"method\": \"NFC_CARD\",\n  \"driverLocation\": {\n    \"longitude\": 46.6753,\n    \"latitude\": 24.7136\n  }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/orders/{{orderId}}/verify-vehicle",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders",
+                "{{orderId}}",
+                "verify-vehicle"
+              ]
+            },
+            "description": "spec 008 US4 amendment (2026-08-27, research R14). Same card, second read — but at `LOADING` this additionally requires the driver to be within `WAREHOUSE_GEOFENCE_RADIUS_METERS` (default 500m) of the assigned warehouse. `driverLocation` here should match the warehouse you created (or the one **Assign Driver** picked automatically) to pass.\n\n`403 VEHICLE_MISMATCH` — wrong truck, answered first, reveals nothing about location. `403 NOT_AT_WAREHOUSE` — right truck, outside the radius; body carries `distanceMeters`/`radiusMeters`. `400 LOCATION_REQUIRED` — no `driverLocation` at all; nothing is recorded, since nothing about the vehicle could be evaluated. A successful match here does NOT itself advance the order — run **Confirm Loading** next."
+          },
+          "response": []
+        },
+        {
+          "name": "Confirm Loading",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenDriver}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/orders/{{orderId}}/confirm-loading",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders",
+                "{{orderId}}",
+                "confirm-loading"
+              ]
+            },
+            "description": "spec 008 US4. Empty body — no quantity field exists anywhere in this flow (FR-028); the authoritative volume arrives later from an Aramco invoice, a separate feature. Requires the LOADING-stage verification above to have already matched — `409 VEHICLE_NOT_VERIFIED` otherwise. On success, `LOADING → IN_TRANSIT` and the delivery is routed to the customer."
+          },
+          "response": []
+        },
+        {
+          "name": "Driver Arrive",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenDriver}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/orders/{{orderId}}/arrive",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders",
+                "{{orderId}}",
+                "arrive"
+              ]
+            },
+            "description": "DRIVER (assigned). Order must be IN_TRANSIT. Generates the ARRIVAL OTP; response contains no OTP. Idempotent while an unused, unexpired OTP exists."
+          },
+          "response": []
+        },
+        {
+          "name": "Verify Arrival OTP",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenDriver}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"otp\": \"{{currentOtp}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/orders/{{orderId}}/verify-arrival",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders",
+                "{{orderId}}",
+                "verify-arrival"
+              ]
+            },
+            "description": "DRIVER (assigned). Throttled 5/15min. On match → UNLOADING; 422 wrong OTP; 429 throttled (FR-021/023). Run **Get Current OTP** first to populate `{{currentOtp}}`."
+          },
+          "response": []
+        },
+        {
+          "name": "Request Delivery OTP",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenDriver}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/orders/{{orderId}}/request-delivery-otp",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders",
+                "{{orderId}}",
+                "request-delivery-otp"
+              ]
+            },
+            "description": "DRIVER (assigned). Order must be UNLOADING. Response contains no OTP — fetch it via **Get Current OTP** as the client."
+          },
+          "response": []
+        },
+        {
+          "name": "Verify Delivery OTP",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenDriver}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"otp\": \"{{currentOtp}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/orders/{{orderId}}/verify-delivery",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders",
+                "{{orderId}}",
+                "verify-delivery"
+              ]
+            },
+            "description": "DRIVER (assigned). Throttled 5/15min. On match → DELIVERED (transaction), driver released (FR-022). Run **Get Current OTP** again first — the delivery OTP replaces the arrival one."
+          },
+          "response": []
+        },
+        {
+          "name": "Force Complete Order",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenCompanyAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Driver reported delivery via phone call; portal unavailable on-site\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/orders/{{orderId}}/force-complete",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders",
+                "{{orderId}}",
+                "force-complete"
+              ]
+            },
+            "description": "FUEL_COMPANY_ADMIN only (403 for DRIVER/CLIENT). Order must be `LOADING`, `IN_TRANSIT` or `UNLOADING` (409 otherwise — spec 008 FR-046e added `LOADING` to the set, so an operator can still short-circuit a delivery stuck at the depot). `reason` is 5–500 chars and required. Marks `statusHistory` with `manualOverride: true` (FR-025)."
+          },
+          "response": []
+        },
+        {
+          "name": "Quote Order",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenClient}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fuelType\": \"PETROL_91\",\n  \"quantityLiters\": 5000,\n  \"stationId\": \"{{stationId}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/orders/quote",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders",
+                "quote"
+              ]
+            },
+            "description": "CLIENT (spec 005 T054/US2). Returns the itemised `breakdown`, an opaque `quoteToken` and `expiresAt`.\n\nThe four components — `fuelLineTotal`, `deliveryFee`, `serviceFee`, `tax` — always reconcile to `total` (FR-011b). The app never computes or apportions any of them itself.\n\n`stationId` must be the caller's own; a foreign id 404s without revealing whether it exists. Run **Stations → List My Stations** first to populate `{{stationId}}`.\n\nPair the saved `{{quoteToken}}` with **Create Order (quoted)**. The server recomputes from its own live configuration at redemption and never trusts a figure the token carries — a stale one yields **409 `QUOTE_STALE`** carrying the new breakdown, an expired one **409 `QUOTE_EXPIRED`** (research R10)."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Quote issued', () => pm.response.to.be.success);",
+                  "const data = pm.response.json();",
+                  "if (data.quoteToken) pm.collectionVariables.set('quoteToken', data.quoteToken);",
+                  "const b = data.breakdown || {};",
+                  "pm.test('components reconcile to the total (FR-011b)', () => {",
+                  "  const sum = b.fuelLineTotal + b.deliveryFee + b.serviceFee + b.tax;",
+                  "  pm.expect(Number(sum.toFixed(2))).to.eql(b.total);",
+                  "});"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Create Order (quoted)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenClient}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"fuelType\": \"PETROL_91\",\n  \"quantityLiters\": 5000,\n  \"stationId\": \"{{stationId}}\",\n  \"quoteToken\": \"{{quoteToken}}\",\n  \"paymentMethod\": \"CREDIT\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders"
+              ]
+            },
+            "description": "CLIENT — the real spec-005 ordering flow: **Quote Order** first, then submit the token it returned alongside the station it was quoted for.\n\nThe token is revalidated inside the existing creation transaction and the resulting `priceBreakdown` is persisted on the order, so the quote, the receipt and the invoice all show the same figures (FR-011e).\n\nReturns **409 `QUOTE_STALE`** with the current breakdown if pricing moved since the quote — show the new total and re-confirm, never silently adopt either figure.\n\nOn `DEFERRED`/`CREDIT` terms no payment step follows (FR-014); `CREDIT` is refused over the available limit."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Order created', () => pm.response.to.be.success);",
+                  "const data = pm.response.json();",
+                  "if (data._id) pm.collectionVariables.set('orderId', data._id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Override Verification",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenTransportAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"reason\": \"Driver at depot, no signal; confirmed by phone\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/orders/{{orderId}}/override-verification",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders",
+                "{{orderId}}",
+                "override-verification"
+              ]
+            },
+            "description": "spec 008 FR-047. TRANSPORT_COMPANY_ADMIN (own transporter only — 404 for another carrier's order). The escape hatch for a driver who genuinely can't reach the platform to verify. Advances exactly the one outstanding stage — `409` if none is outstanding (can't skip ahead). Writes NO `VehicleVerification` record (research R10) — that omission is what keeps \"overridden\" structurally distinct from \"verified\": a customer's `vehicleVerified` stays `false` for a delivery that was only ever attested, never actually checked (FR-047d)."
+          },
+          "response": []
+        },
+        {
+          "name": "Reassign Vehicle",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenTransportAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"truckId\": \"{{truckId}}\",\n  \"tankId\": \"{{tankId}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/orders/{{orderId}}/reassign-vehicle",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders",
+                "{{orderId}}",
+                "reassign-vehicle"
+              ]
+            },
+            "description": "spec 008 FR-015. Pre-departure correction only — valid exactly at `ASSIGNED_TO_DRIVER` (once `LOADING` starts, the driver has already left for the depot)."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Orders Summary",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenTransportAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/orders/summary",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders",
+                "summary"
+              ]
+            },
+            "description": "Feature 009 FR-059-061/FR-067. TRANSPORT_COMPANY_ADMIN or SUPER_ADMIN. The transport dashboard's whole overview in one request — counts per stage group, drivers on duty, outstanding settlements. `from`/`to` (query params, ISO dates) default to the current month."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Dispatch",
+      "item": [
+        {
+          "name": "Get Candidates",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenTransportAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/dispatch/orders/{{orderId}}/candidates",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "dispatch",
+                "orders",
+                "{{orderId}}",
+                "candidates"
+              ]
+            },
+            "description": "TRANSPORT_COMPANY_ADMIN (of the order's routed transporter). Order must be `ROUTED_TO_TRANSPORT`. Ranked list of that transporter's own available drivers by **proximity and availability only** — spec 008 moved capacity/grade capability to the tank, checked at tank selection instead. Each candidate carries `suggestedTruck` (their last-operated truck, derived from order history; `null` when they've never driven one or it's withdrawn/busy)."
+          },
+          "response": []
+        },
+        {
+          "name": "Assign Driver",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenTransportAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"driverId\": \"{{driverId}}\",\n  \"truckId\": \"{{truckId}}\",\n  \"tankId\": \"{{tankId}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/dispatch/orders/{{orderId}}/assign",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "dispatch",
+                "orders",
+                "{{orderId}}",
+                "assign"
+              ]
+            },
+            "description": "TRANSPORT_COMPANY_ADMIN (of the order's routed transporter). spec 008 FR-009: selection is sequential — driver, then truck, then tank (see **Trucks**/**Tanks** to create them first). Books all three atomically (txn) and stops at `ROUTED_TO_TRANSPORT` → `ASSIGNED_TO_DRIVER` — it no longer auto-advances to `IN_TRANSIT`; that now requires **Orders → Verify Vehicle** (departure), then the warehouse leg, then a second verification before **Orders → Confirm Loading** reaches `IN_TRANSIT`.\n\n`409 TRUCK_UNAVAILABLE`/`TANK_UNAVAILABLE` (withdrawn or already committed), `409 TANK_CAPACITY_EXCEEDED`/`TANK_GRADE_UNSUPPORTED` (chosen tank can't carry this order), `409 NO_WAREHOUSE_FOR_GRADE` (no in-service depot supplies the grade — checked before anything is booked), `409 ORDER_ALREADY_ASSIGNED` (a concurrent assignment already won). A refusal books nothing — all three resources are released together."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Trucks",
+      "description": "spec 008 US1. TRANSPORT_COMPANY_ADMIN, scoped to their own company. A truck carries no capacity or fuel grade of its own — both moved to **Tanks** (research R3). `nfcCardUid`/`qrToken` are credentials, never returned by any read here (FR-042) — only the mint/rotate calls return a token, once, at mint time. Run **Create Truck** first, then **Pair NFC Card** or **Mint QR Token** so **Orders → Verify Vehicle** has something real to check against.",
+      "item": [
+        {
+          "name": "Create Truck",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenTransportAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"plateNumber\": \"SMK-1\",\n  \"model\": \"Volvo FH\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/trucks",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "trucks"
+              ]
+            },
+            "description": "`model` is optional. `409 DUPLICATE_PLATE` if this company already has that plate."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Truck created', () => pm.response.to.be.success);",
+                  "const data = pm.response.json();",
+                  "if (data.id) pm.collectionVariables.set('truckId', data.id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Trucks",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenTransportAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/trucks?available=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "trucks?available=true"
+              ]
+            },
+            "description": "`available=true` filters to `isActive` + no `activeOrderId`. The response's `fleetRegistered` distinguishes \"nothing registered yet\" from \"registered but all busy\" — both give an empty `items` array, so this flag is the only way to tell them apart (FR-043c)."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Truck by ID",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenTransportAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/trucks/{{truckId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "trucks",
+                "{{truckId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update Truck",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenTransportAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"plateNumber\": \"SMK-1\",\n  \"model\": \"Volvo FH16\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/trucks/{{truckId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "trucks",
+                "{{truckId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Withdraw Truck",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenTransportAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/trucks/{{truckId}}/withdraw",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "trucks",
+                "{{truckId}}",
+                "withdraw"
+              ]
+            },
+            "description": "Never touches `activeOrderId` (FR-008) — an in-progress delivery continues; this only blocks NEW assignments."
+          },
+          "response": []
+        },
+        {
+          "name": "Restore Truck",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenTransportAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/trucks/{{truckId}}/restore",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "trucks",
+                "{{truckId}}",
+                "restore"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Pair NFC Card",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenTransportAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nfcCardUid\": \"{{nfcCardUid}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/trucks/{{truckId}}/pair-card",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "trucks",
+                "{{truckId}}",
+                "pair-card"
+              ]
+            },
+            "description": "FR-005/SC-008: `409 CARD_ALREADY_PAIRED` (with `heldByPlateNumber`, feature 009 FR-050) if another truck already holds this card — both trucks are left unchanged. FR-036e: pairing a new card clears any previously minted `qrToken` on this truck."
+          },
+          "response": []
+        },
+        {
+          "name": "Mint QR Token",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenTransportAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/trucks/{{truckId}}/qr-token",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "trucks",
+                "{{truckId}}",
+                "qr-token"
+              ]
+            },
+            "description": "The QR path for a device with no NFC (FR-036). This is one of only two responses that ever return a raw `qrToken` (FR-042) — copy it out now, since no read endpoint will show it again. Coexists with a paired card (FR-036d); minting doesn't disturb it."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('QR token minted', () => pm.response.to.be.success);",
+                  "const data = pm.response.json();",
+                  "if (data.qrToken) pm.collectionVariables.set('qrToken', data.qrToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Rotate QR Token",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenTransportAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/trucks/{{truckId}}/qr-token/rotate",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "trucks",
+                "{{truckId}}",
+                "qr-token",
+                "rotate"
+              ]
+            },
+            "description": "Revoking a leaked code is a rotation, not an expiry wait (research R6). Same response shape as mint."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('QR token rotated', () => pm.response.to.be.success);",
+                  "const data = pm.response.json();",
+                  "if (data.qrToken) pm.collectionVariables.set('qrToken', data.qrToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Revoke QR Token",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenTransportAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/trucks/{{truckId}}/qr-token/revoke",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "trucks",
+                "{{truckId}}",
+                "qr-token",
+                "revoke"
+              ]
+            },
+            "description": "Revokes without minting a replacement — the truck falls back to card-only."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Tanks",
+      "description": "spec 008 US1. TRANSPORT_COMPANY_ADMIN. The trailer — carries capacity and permitted grades (research R3), so the assignment guards (`TANK_CAPACITY_EXCEEDED`/`TANK_GRADE_UNSUPPORTED`) validate THIS record, never the truck. A tank has no credential of any kind (FR-048c) — it's assigned, never verified.",
+      "item": [
+        {
+          "name": "Create Tank",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenTransportAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"code\": \"TNK-9921\",\n  \"material\": \"ALUMINIUM\",\n  \"maxCapacityLiters\": 30000,\n  \"fuelTypes\": [\"DIESEL\", \"PETROL_91\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/tanks",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "tanks"
+              ]
+            },
+            "description": "`code` is unique **platform-wide**, not just within the company (FR-048b) — it reaches a driver's screen, so two tanks answering to one code would be ambiguous. `material` is `IRON` | `ALUMINIUM`, recorded as fact only — it never derives or constrains `fuelTypes` (FR-048g). `409 TANK_CODE_IN_USE` on a collision."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Tank created', () => pm.response.to.be.success);",
+                  "const data = pm.response.json();",
+                  "if (data._id) pm.collectionVariables.set('tankId', data._id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Tanks",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenTransportAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/tanks",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "tanks"
+              ]
+            },
+            "description": "Same `fleetRegistered` distinction as **Trucks → List Trucks**."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Tank by ID",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenTransportAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/tanks/{{tankId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "tanks",
+                "{{tankId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update Tank",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenTransportAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"maxCapacityLiters\": 32000\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/tanks/{{tankId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "tanks",
+                "{{tankId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Withdraw Tank",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenTransportAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/tanks/{{tankId}}/withdraw",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "tanks",
+                "{{tankId}}",
+                "withdraw"
+              ]
+            },
+            "description": "Never touches `activeOrderId` — an in-progress delivery continues."
+          },
+          "response": []
+        },
+        {
+          "name": "Restore Tank",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenTransportAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/tanks/{{tankId}}/restore",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "tanks",
+                "{{tankId}}",
+                "restore"
+              ]
+            }
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Warehouses",
+      "description": "spec 008 US4. The one collection with **no tenant scoping at all** (research R1) — read by every authenticated role (a driver must be able to read the depot they're sent to), written only by SUPER_ADMIN. **Assign Driver** (see **Dispatch**) picks the nearest in-service warehouse supplying the order's grade automatically — create at least one here before assigning anything, or assignment fails with `NO_WAREHOUSE_FOR_GRADE`.",
+      "item": [
+        {
+          "name": "Create Warehouse",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenSuperAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Riyadh North Depot\",\n  \"location\": {\n    \"longitude\": 46.6753,\n    \"latitude\": 24.7136\n  },\n  \"addressText\": \"Exit 9, Northern Ring Road, Riyadh\",\n  \"region\": \"{{regionCode}}\",\n  \"governorate\": \"{{governorateCode}}\",\n  \"fuelTypes\": [\"DIESEL\", \"PETROL_91\"]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/warehouses",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "warehouses"
+              ]
+            },
+            "description": "`externalRef` is optional — set it to make a later bulk load upsert onto this row instead of duplicating it (FR-035a)."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Warehouse created', () => pm.response.to.be.success);",
+                  "const data = pm.response.json();",
+                  "if (data._id) pm.collectionVariables.set('warehouseId', data._id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Bulk Load Warehouses",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenSuperAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"warehouses\": [\n    {\n      \"name\": \"Jeddah Coastal Depot\",\n      \"location\": { \"longitude\": 39.1925, \"latitude\": 21.4858 },\n      \"addressText\": \"Old Makkah Road, Jeddah\",\n      \"region\": \"MAKKAH\",\n      \"governorate\": \"JEDDAH\",\n      \"fuelTypes\": [\"DIESEL\", \"PETROL_91\", \"PETROL_95\"],\n      \"externalRef\": \"NATL-WH-0042\"\n    }\n  ]\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/warehouses/bulk",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "warehouses",
+                "bulk"
+              ]
+            },
+            "description": "Idempotent on `externalRef` → `{ created, updated }`. Re-running the national dataset updates existing rows rather than duplicating them."
+          },
+          "response": []
+        },
+        {
+          "name": "List Warehouses",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenDriver}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/warehouses",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "warehouses"
+              ]
+            },
+            "description": "Open to every authenticated role — shown here as DRIVER to make that explicit; any logged-in token works."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Warehouse by ID",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenDriver}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/warehouses/{{warehouseId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "warehouses",
+                "{{warehouseId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Update Warehouse",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenSuperAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"addressText\": \"Exit 9, Northern Ring Road, Riyadh (updated)\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/warehouses/{{warehouseId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "warehouses",
+                "{{warehouseId}}"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "Withdraw Warehouse",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenSuperAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/warehouses/{{warehouseId}}/withdraw",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "warehouses",
+                "{{warehouseId}}",
+                "withdraw"
+              ]
+            },
+            "description": "Affects only deliveries not yet assigned (FR-035e) — an order that already snapshotted this warehouse keeps showing it regardless."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Invoices",
+      "item": [
+        {
+          "name": "List Invoices",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenCompanyAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/invoices",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "invoices"
+              ]
+            },
+            "description": "FUEL_COMPANY_ADMIN | TRANSPORT_COMPANY_ADMIN | CLIENT. Scoped by the multi-party plugin: a Fuel Company sees every invoice it issued (any method); a Transportation Company sees only DEFERRED invoices routed to them; a CLIENT sees only their own (spec 004 T072). Optional `?method=&state=` filters."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const data = pm.response.json();",
+                  "if (Array.isArray(data) && data.length > 0 && data[0]._id) pm.collectionVariables.set('invoiceId', data[0]._id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get Invoice by ID",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenCompanyAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/invoices/{{invoiceId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "invoices",
+                "{{invoiceId}}"
+              ]
+            },
+            "description": "As **List Invoices**, scoped the same way, for a single invoice."
+          },
+          "response": []
+        },
+        {
+          "name": "Settle Invoice",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenTransportAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"paymentReference\": \"offline-transfer-1\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/invoices/{{invoiceId}}/settle",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "invoices",
+                "{{invoiceId}}",
+                "settle"
+              ]
+            },
+            "description": "TRANSPORT_COMPANY_ADMIN (DEFERRED invoices only) or FUEL_COMPANY_ADMIN (CREDIT invoices only, swap the bearer token to `{{accessTokenCompanyAdmin}}`) — manual settlement for the two methods never confirmed by a payment-gateway webhook (spec 004 FR-022). `403` for a DIRECT invoice (settled only by **Payments (Webhooks)**) or the wrong role for the invoice's method. Idempotent: settling an already-SETTLED or VOIDed invoice is a no-op."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Stations",
+      "description": "A client's delivery destinations (spec 005 D2/US8). \"Station\" is the canonical term across the platform, the app and the specs.\n\nNote the direction: a station **receives** fuel, it does not dispense it.\n\nA client selects among their stations and marks favourites but may not add, rename or remove one — that is the fuel company's job, under **Users → Create Client Station**.",
+      "item": [
+        {
+          "name": "List My Stations",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenClient}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/stations",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "stations"
+              ]
+            },
+            "description": "CLIENT (spec 005 T014). The caller's own active stations, default first.\n\nScoped by `clientId` **on top of** the tenant plugin: company scoping alone is insufficient here, because two clients share a fuel company — this is the single likeliest place to introduce a cross-client leak.\n\nSaves the first station to `{{stationId}}` for the quote and order requests."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Stations listed', () => pm.response.to.be.success);",
+                  "const items = (pm.response.json().items) || [];",
+                  "if (items.length) pm.collectionVariables.set('stationId', items[0]._id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Set Station Favourite",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenClient}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"isFavourite\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/stations/{{stationId}}/favourite",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "stations",
+                "{{stationId}}",
+                "favourite"
+              ]
+            },
+            "description": "CLIENT (spec 005 T107/FR-037). `isFavourite` is the **only** field a client may ever write on a station, and the DTO whitelists it alone — any other field is a 400 under `forbidNonWhitelisted`, which is what enforces \"no rename\" here (FR-036b).\n\nThe flip is persisted server-side, so it survives a restart and reaches the client's other devices.\n\nAnother client's station 404s — **including one in the same fuel company**."
+          },
+          "response": []
+        },
+        {
+          "name": "Update Station (Admin)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenCompanyAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Riyadh Depot — North (renamed)\",\n  \"addressText\": \"Al Olaya, Riyadh\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/stations/{{stationId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "stations",
+                "{{stationId}}"
+              ]
+            },
+            "description": "FUEL_COMPANY_ADMIN (spec 005 T108). Every field optional.\n\n`regionCode` and `governorateCode` must be updated **together** — validating the pairing needs both — and the governorate must belong to the region."
+          },
+          "response": []
+        },
+        {
+          "name": "Delete Station (Admin)",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenCompanyAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/stations/{{stationId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "stations",
+                "{{stationId}}"
+              ]
+            },
+            "description": "FUEL_COMPANY_ADMIN. **204**, a soft delete — a withdrawn station stays readable on the historical orders that used it (FR-036c).\n\nDeleting the client's last active station is refused with **409 `LAST_STATION`**; deleting the default promotes the next one, so the \"exactly one default per client\" invariant is held at the data layer by a partial unique index rather than assumed from ordering (Principle V)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Support",
+      "description": "Client support requests (spec 005 US9). Two states only — `SUBMITTED` and `ACKNOWLEDGED`. No threaded conversation, admin reply or resolution workflow is in scope (FR-039a).\n\nA request routes to the administrators of the client's **own** fuel company through the existing notification path, never a second delivery mechanism (FR-038b).",
+      "item": [
+        {
+          "name": "Raise Support Request",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenClient}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"topic\": \"ORDER_ISSUE\",\n  \"message\": \"The delivery has not arrived and the driver is unreachable.\",\n  \"orderId\": \"{{orderId}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/support/requests",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "support",
+                "requests"
+              ]
+            },
+            "description": "CLIENT (spec 005 T118). `topic` is one of `ORDER_ISSUE`, `PAYMENT`, `ACCOUNT`, `OTHER`. `message` is 1–2000 characters.\n\n`orderId` is optional — when present the order is attached automatically, so the client never has to recite its number (FR-038). Attaching an order the client does not own 404s.\n\nRaises a `SUPPORT_REQUEST_RAISED` notification to that fuel company's admins and to no other company (FR-038a)."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Support request raised', () => pm.response.to.be.success);",
+                  "const data = pm.response.json();",
+                  "if (data._id) pm.collectionVariables.set('supportRequestId', data._id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List Support Requests",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenClient}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/support/requests",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "support",
+                "requests"
+              ]
+            },
+            "description": "CLIENT sees their own; FUEL_COMPANY_ADMIN sees their company's whole set — same route, per-role query, with the tenant plugin scoping the admin view automatically.\n\nThis is how a client confirms a request was received and whether an administrator has acknowledged it (FR-039). Swap the bearer token to `{{accessTokenCompanyAdmin}}` for the admin view."
+          },
+          "response": []
+        },
+        {
+          "name": "Acknowledge Support Request",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenCompanyAdmin}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/support/requests/{{supportRequestId}}/acknowledge",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "support",
+                "requests",
+                "{{supportRequestId}}",
+                "acknowledge"
+              ]
+            },
+            "description": "FUEL_COMPANY_ADMIN (spec 005 T118). `SUBMITTED → ACKNOWLEDGED`, one way — there is no reverse transition.\n\nAn admin of any other company gets a 404."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Files",
+      "item": [
+        {
+          "name": "Upload File",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "purpose",
+                  "value": "PROFILE_PICTURE",
+                  "type": "text",
+                  "description": "COMMERCIAL_REGISTER | PROFILE_PICTURE"
+                },
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": [],
+                  "description": "MIME allowlisted, <= 10MB."
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/files",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "files"
+              ]
+            },
+            "description": "Any authenticated (company-scoped) user (FR-020). Stored under `sys_storge/{companyId}/`."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('File uploaded', () => pm.response.to.be.success);",
+                  "const data = pm.response.json();",
+                  "if (data._id) pm.collectionVariables.set('fileId', data._id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Download File",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/files/{{fileId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "files",
+                "{{fileId}}"
+              ]
+            },
+            "description": "Same-company roles per purpose, or SUPER_ADMIN. Streams the file; 404 cross-tenant."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Notifications",
+      "item": [
+        {
+          "name": "List Notifications",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/notifications?unread=true",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "notifications"
+              ],
+              "query": [
+                {
+                  "key": "unread",
+                  "value": "true"
+                }
+              ]
+            },
+            "description": "Own notifications only, for whichever role last logged in."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Notifications fetched', () => pm.response.to.be.success);",
+                  "const data = pm.response.json();",
+                  "if (Array.isArray(data) && data.length && data[0]._id) pm.collectionVariables.set('notificationId', data[0]._id);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Mark Notification Read",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/notifications/{{notificationId}}/read",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "notifications",
+                "{{notificationId}}",
+                "read"
+              ]
+            },
+            "description": "Own only."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Payments",
+      "item": [
+        {
+          "name": "List My Payments",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{accessTokenClient}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/payments?cursor=",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payments"
+              ],
+              "query": [
+                {
+                  "key": "cursor",
+                  "value": "",
+                  "description": "Opaque cursor from the previous page. Omit for page one."
+                }
+              ]
+            },
+            "description": "CLIENT (spec 005 T074/US4). Cursor-paginated payment history, filtered to terminal outcomes, newest first.\n\n`rawPayload` is projected away explicitly rather than left to be forgotten — it can carry gateway card metadata (Constitution Principle II).\n\nA client sees only their own payments. Pass `cursor` from the previous page's `nextCursor`; `nextCursor: null` is the end of the list."
+          },
+          "response": []
+        },
+        {
+          "name": "Webhook – Sadad",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Signature",
+                "value": "{{computedSignature}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{{webhookRawBody}}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/payments/webhook/sadad",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payments",
+                "webhook",
+                "sadad"
+              ]
+            },
+            "description": "[public] Simulates the Sadad gateway confirming payment for `{{orderId}}`. The pre-request script builds the exact JSON body and signs it with `PAYMENT_SADAD_SECRET` (`paymentSadadSecret` variable) via HMAC-SHA256, matching `payments.service.ts`'s `verifySignature`. Run **Orders → Approve Order** first so `{{orderFinalPrice}}` is set."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const secret = pm.collectionVariables.get('paymentSadadSecret');",
+                  "const payload = {",
+                  "  transactionId: 'SDD-' + pm.collectionVariables.get('orderId'),",
+                  "  orderId: pm.collectionVariables.get('orderId'),",
+                  "  amount: Number(pm.collectionVariables.get('orderFinalPrice') || 0),",
+                  "  currency: 'SAR',",
+                  "  status: 'PAID',",
+                  "  paidAt: new Date().toISOString()",
+                  "};",
+                  "const rawBody = JSON.stringify(payload);",
+                  "pm.collectionVariables.set('webhookRawBody', rawBody);",
+                  "const signature = CryptoJS.HmacSHA256(rawBody, secret).toString(CryptoJS.enc.Hex);",
+                  "pm.collectionVariables.set('computedSignature', signature);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Webhook accepted', () => pm.response.to.be.success);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Webhook – Mada",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Signature",
+                "value": "{{computedSignature}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{{webhookRawBody}}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/payments/webhook/mada",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "payments",
+                "webhook",
+                "mada"
+              ]
+            },
+            "description": "[public] Same as the Sadad webhook but signed with `PAYMENT_MADA_SECRET` (`paymentMadaSecret` variable)."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const secret = pm.collectionVariables.get('paymentMadaSecret');",
+                  "const payload = {",
+                  "  transactionId: 'MDA-' + pm.collectionVariables.get('orderId'),",
+                  "  orderId: pm.collectionVariables.get('orderId'),",
+                  "  amount: Number(pm.collectionVariables.get('orderFinalPrice') || 0),",
+                  "  currency: 'SAR',",
+                  "  status: 'PAID',",
+                  "  paidAt: new Date().toISOString()",
+                  "};",
+                  "const rawBody = JSON.stringify(payload);",
+                  "pm.collectionVariables.set('webhookRawBody', rawBody);",
+                  "const signature = CryptoJS.HmacSHA256(rawBody, secret).toString(CryptoJS.enc.Hex);",
+                  "pm.collectionVariables.set('computedSignature', signature);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Webhook accepted', () => pm.response.to.be.success);"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { ClientSession, Model, Types } from 'mongoose';
 import { Order, OrderDocument } from '../schemas/order.schema';
@@ -15,22 +15,62 @@ interface TransitionRule {
   requiresManualOverride?: boolean;
 }
 
-// Exactly mirrors data-model.md's state machine diagram (FR-006/FR-025).
+// Mirrors data-model.md's state machine diagram (FR-006/FR-025), extended by
+// spec 004 FR-014/FR-016 (routing) and FR-020a/FR-020b (billing, US5):
+//
+// - APPROVED branches into AWAITING_ROUTING (no transporter serves the
+//   client's region), ROUTED_TO_TRANSPORT (one resolved) — both immediately,
+//   for DEFERRED/CREDIT orders — OR, for DIRECT orders, PENDING_PAYMENT
+//   first: FR-020a forbids routing a direct order before its invoice is
+//   settled, so DIRECT reaches routing only via PENDING_PAYMENT -> APPROVED
+//   (settlement) -> a second pass through this same APPROVED branch.
+// - PENDING_PAYMENT -> APPROVED therefore serves TWO distinct events that
+//   share one edge: a successful settlement (proceeds to routing next) and a
+//   timeout (paymentTimeoutCount increments, redispatch re-opens payment).
+// - spec 008 FR-046a/R3: ASSIGNED_TO_DRIVER no longer auto-advances to
+//   IN_TRANSIT — that edge is REMOVED. Assignment now stops at
+//   ASSIGNED_TO_DRIVER pending departure verification (or an operator
+//   override), which lands the order on the new LOADING status; loading
+//   confirmation (or override) is what reaches IN_TRANSIT. IN_TRANSIT
+//   therefore narrows to "loaded and travelling to the customer".
 const TRANSITIONS: Record<OrderStatus, TransitionRule[]> = {
   [OrderStatus.PENDING_APPROVAL]: [
     { to: OrderStatus.APPROVED },
     { to: OrderStatus.REJECTED },
     { to: OrderStatus.CANCELLED },
   ],
-  [OrderStatus.APPROVED]: [{ to: OrderStatus.ASSIGNED_TO_DRIVER }, { to: OrderStatus.CANCELLED }],
-  [OrderStatus.ASSIGNED_TO_DRIVER]: [
-    { to: OrderStatus.PENDING_PAYMENT },
+  [OrderStatus.APPROVED]: [
+    { to: OrderStatus.PENDING_PAYMENT }, // DIRECT invoice just issued (FR-020a)
+    { to: OrderStatus.AWAITING_ROUTING },
+    { to: OrderStatus.ROUTED_TO_TRANSPORT },
     { to: OrderStatus.CANCELLED },
   ],
+  [OrderStatus.AWAITING_ROUTING]: [
+    { to: OrderStatus.ROUTED_TO_TRANSPORT }, // admin manually resolves a transporter later
+    { to: OrderStatus.CANCELLED },
+  ],
+  [OrderStatus.ROUTED_TO_TRANSPORT]: [
+    { to: OrderStatus.ASSIGNED_TO_DRIVER },
+    { to: OrderStatus.CANCELLED },
+  ],
+  // spec 008: LOADING replaces the direct edge to IN_TRANSIT — reached by a
+  // successful departure verification or an operator override, never by
+  // assignment itself (FR-046a).
+  [OrderStatus.ASSIGNED_TO_DRIVER]: [{ to: OrderStatus.LOADING }, { to: OrderStatus.CANCELLED }],
   [OrderStatus.PENDING_PAYMENT]: [
-    { to: OrderStatus.IN_TRANSIT },
-    { to: OrderStatus.APPROVED }, // payment-deadline reversion (FR-015a)
+    // Settlement (routing resumes next, orders.service.ts) AND the
+    // payment-deadline timeout (FR-015a, redispatch re-opens the window)
+    // are the same edge — see the block comment above.
+    { to: OrderStatus.APPROVED },
     { to: OrderStatus.CANCELLED }, // admin cancel OR client declines final price (FR-009)
+  ],
+  // spec 008 FR-046d/FR-046e: loading confirmation (or override) reaches
+  // IN_TRANSIT; cancellation stays reachable while the truck is still at the
+  // depot; DELIVERED is force-complete only, mirroring IN_TRANSIT's own edge.
+  [OrderStatus.LOADING]: [
+    { to: OrderStatus.IN_TRANSIT },
+    { to: OrderStatus.CANCELLED },
+    { to: OrderStatus.DELIVERED, requiresManualOverride: true },
   ],
   [OrderStatus.IN_TRANSIT]: [
     { to: OrderStatus.UNLOADING },
@@ -59,6 +99,8 @@ export interface TransitionOptions {
 
 @Injectable()
 export class OrderStateService {
+  private readonly logger = new Logger(OrderStateService.name);
+
   constructor(
     @InjectModel(Order.name) private readonly orderModel: Model<OrderDocument>,
     private readonly realtimeGateway: RealtimeGatewayService,
@@ -96,7 +138,16 @@ export class OrderStateService {
       .findOneAndUpdate(
         { _id: orderId, status: from },
         {
-          $set: { status: to, ...options.extraSet },
+          $set: {
+            status: to,
+            // spec 007 FR-032/FR-033/research R7: set here, not at either
+            // caller, so it is set identically whether DELIVERED is reached
+            // via the normal OTP flow or an admin `forceComplete` override
+            // (T071) — `updatedAt` drifts after this moment (invoice
+            // issuance, payment settlement), so it cannot back a daily count.
+            ...(to === OrderStatus.DELIVERED ? { deliveredAt: historyEntry.at } : {}),
+            ...options.extraSet,
+          },
           $push: { statusHistory: historyEntry },
           ...(options.extraUnset?.length
             ? { $unset: Object.fromEntries(options.extraUnset.map((f) => [f, ''])) }
@@ -107,16 +158,43 @@ export class OrderStateService {
       .exec();
 
     if (updated) {
+      // spec 012 FR-032/SC-007. THE record an order's history is reconstructed
+      // from: every status change the platform makes passes through this one
+      // method, so one record here covers all of them.
+      //
+      // `orderId` is a FIELD, never interpolated into the message. That is the
+      // whole requirement and the single easiest thing to half-do — a message
+      // reading `Order 652f… moved to LOADING` looks identical in a terminal
+      // and is not retrievable by `jsonPayload.orderId`, which is how an
+      // incident is actually investigated. `from`/`to`/`actorRole` are fields
+      // for the same reason.
+      this.logger.log(
+        {
+          orderId: String(orderId),
+          from,
+          to,
+          actorRole: actor.actorRole,
+          manualOverride: options.manualOverride ?? false,
+        },
+        'Order status transition',
+      );
+
       // Emitted synchronously with the write rather than after commit — the
       // one edge case this misses (transaction rolls back after this point)
       // is rare and self-corrects on the watcher's next fetch; not worth the
       // complexity of deferring emission for a system this size.
-      this.realtimeGateway.emitToOrderRoom(String(orderId), 'order:status', {
-        orderId: String(orderId),
-        from,
-        to,
-        at: historyEntry.at,
-      });
+      const payload = { orderId: String(orderId), from, to, at: historyEntry.at };
+      this.realtimeGateway.emitToOrderRoom(String(orderId), 'order:status', payload);
+      // spec 007: a DRIVER can never join the order room — TrackingGateway's
+      // `order:watch` refuses UserRole.DRIVER with FORBIDDEN_ROLE, since that
+      // room also carries the client's live driver-position feed. Without
+      // this second emit, an order status change could never reach the
+      // assigned driver by any path (research R1). Same payload, same event
+      // name, so the app registers exactly one `order:status` handler
+      // regardless of which room delivered it.
+      if (updated.driverId) {
+        this.realtimeGateway.emitToUser(String(updated.driverId), 'order:status', payload);
+      }
       return updated;
     }
 

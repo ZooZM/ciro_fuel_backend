@@ -4,10 +4,16 @@ import { INestApplication } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { createTestApp, TestAppContext } from '../utils/test-app.factory';
-import { seedTwoCompanies, TwoCompanyFixture } from '../utils/fixtures';
+import {
+  seedTwoCompanies,
+  TwoCompanyFixture,
+  assignAndDepart,
+  resetFixtureDispatchState,
+} from '../utils/fixtures';
 import { User, UserDocument } from '../../src/modules/users/schemas/user.schema';
 import { PresenceService } from '../../src/modules/tracking/presence/presence.service';
 import { OrderStatus } from '../../src/common/enums/order-status.enum';
+import { DriverEligibility } from '../../src/common/enums/driver-eligibility.enum';
 
 jest.setTimeout(120_000);
 
@@ -46,10 +52,17 @@ describe('Driver presence (US4) — offline detection & recovery', () => {
         $unset: { activeOrderId: '' },
       },
     );
+    await resetFixtureDispatchState(app, fixtures.companyA);
   });
 
-  it('marks a silent driver offline (sweep, no waiting) and excludes them from dispatch', async () => {
-    const { driver, client, admin } = fixtures.companyA;
+  // spec 010 FR-001/FR-002 (corrected during implementation): a silent
+  // driver is no longer excluded from the candidate list — they now appear,
+  // classified OFFLINE, rather than vanishing. This test used to assert
+  // exclusion; it now asserts the classification, which is what actually
+  // matters here (the sweep's own effect is `isOnline: false`, asserted
+  // directly below regardless of dispatch's presentation of it).
+  it('marks a silent driver offline (sweep, no waiting), shown as OFFLINE in candidates rather than excluded', async () => {
+    const { driver, client, admin, transportAdmin } = fixtures.companyA;
 
     // Simulate 7 minutes of silence directly — no real waiting.
     await userModel.updateOne(
@@ -62,24 +75,30 @@ describe('Driver presence (US4) — offline detection & recovery', () => {
     const afterSweep = await userModel.findById(driver.id).exec();
     expect(afterSweep?.isOnline).toBe(false);
 
-    // With the only driver now offline, dispatch has nobody eligible.
     const server = app.getHttpServer();
     const createRes = await request(server)
       .post('/api/v1/orders')
       .set('Authorization', `Bearer ${client.token}`)
-      .send({ fuelType: 'DIESEL', quantityLiters: 100 })
+      .send({ fuelType: 'DIESEL', quantityLiters: 100, paymentMethod: 'DEFERRED' })
       .expect(201);
     const approveRes = await request(server)
       .patch(`/api/v1/orders/${createRes.body._id}/approve`)
       .set('Authorization', `Bearer ${admin.token}`)
       .send({})
       .expect(200);
-    expect(approveRes.body.status).toBe(OrderStatus.APPROVED);
-    expect(approveRes.body.driverId).toBeFalsy();
+    expect(approveRes.body.status).toBe(OrderStatus.ROUTED_TO_TRANSPORT);
+
+    const candidates = await request(server)
+      .get(`/api/v1/dispatch/orders/${createRes.body._id}/candidates`)
+      .set('Authorization', `Bearer ${transportAdmin.token}`)
+      .expect(200);
+    expect(candidates.body).toHaveLength(1);
+    expect(candidates.body[0]._id).toBe(driver.id);
+    expect(candidates.body[0].eligibility).toBe(DriverEligibility.OFFLINE);
   });
 
   it('restores dispatch eligibility automatically the moment the driver reconnects', async () => {
-    const { driver, client, admin } = fixtures.companyA;
+    const { driver, client, admin, transportAdmin, truck, tank } = fixtures.companyA;
 
     await userModel.updateOne(
       { _id: driver.id },
@@ -99,32 +118,53 @@ describe('Driver presence (US4) — offline detection & recovery', () => {
     const createRes = await request(server)
       .post('/api/v1/orders')
       .set('Authorization', `Bearer ${client.token}`)
-      .send({ fuelType: 'DIESEL', quantityLiters: 100 })
+      .send({ fuelType: 'DIESEL', quantityLiters: 100, paymentMethod: 'DEFERRED' })
       .expect(201);
     const approveRes = await request(server)
       .patch(`/api/v1/orders/${createRes.body._id}/approve`)
       .set('Authorization', `Bearer ${admin.token}`)
       .send({})
       .expect(200);
-    expect(approveRes.body.status).toBe(OrderStatus.PENDING_PAYMENT);
-    expect(approveRes.body.driverId).toBe(driver.id);
+    expect(approveRes.body.status).toBe(OrderStatus.ROUTED_TO_TRANSPORT);
+
+    const candidates = await request(server)
+      .get(`/api/v1/dispatch/orders/${createRes.body._id}/candidates`)
+      .set('Authorization', `Bearer ${transportAdmin.token}`)
+      .expect(200);
+    expect(candidates.body.map((c: { _id: string }) => c._id)).toEqual([driver.id]);
+
+    const assignRes = await request(server)
+      .post(`/api/v1/dispatch/orders/${createRes.body._id}/assign`)
+      .set('Authorization', `Bearer ${transportAdmin.token}`)
+      .send({ driverId: driver.id, truckId: truck.id, tankId: tank.id })
+      .expect(201);
+    expect(assignRes.body.driverId).toBe(driver.id);
   });
 
   it('does not disturb an in-progress order when its driver goes silent', async () => {
-    const { driver, client, admin } = fixtures.companyA;
+    const { driver, client, admin, transportAdmin, truck, tank } = fixtures.companyA;
     const server = app.getHttpServer();
 
     const createRes = await request(server)
       .post('/api/v1/orders')
       .set('Authorization', `Bearer ${client.token}`)
-      .send({ fuelType: 'DIESEL', quantityLiters: 100 })
+      .send({ fuelType: 'DIESEL', quantityLiters: 100, paymentMethod: 'DEFERRED' })
       .expect(201);
-    const approveRes = await request(server)
+    await request(server)
       .patch(`/api/v1/orders/${createRes.body._id}/approve`)
       .set('Authorization', `Bearer ${admin.token}`)
       .send({})
       .expect(200);
-    expect(approveRes.body.status).toBe(OrderStatus.PENDING_PAYMENT);
+    await assignAndDepart(
+      app,
+      createRes.body._id,
+      transportAdmin.token,
+      driver.token,
+      driver.id,
+      truck.id,
+      tank.id,
+      truck.nfcCardUid,
+    );
     const orderId = createRes.body._id;
 
     // Driver goes silent mid-delivery.
@@ -143,6 +183,6 @@ describe('Driver presence (US4) — offline detection & recovery', () => {
       .get(`/api/v1/orders/${orderId}`)
       .set('Authorization', `Bearer ${admin.token}`)
       .expect(200);
-    expect(orderAfterSweep.body.status).toBe(OrderStatus.PENDING_PAYMENT);
+    expect(orderAfterSweep.body.status).toBe(OrderStatus.IN_TRANSIT);
   });
 });

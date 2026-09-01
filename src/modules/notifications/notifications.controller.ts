@@ -9,8 +9,12 @@ export class NotificationsController {
   constructor(private readonly notificationsService: NotificationsService) {}
 
   @Get()
-  findMine(@CurrentUser() user: AuthenticatedUser, @Query('unread') unread?: string) {
-    return this.notificationsService.findForUser(user.userId, unread === 'true');
+  findMine(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('unread') unread?: string,
+    @Query('cursor') cursor?: string,
+  ) {
+    return this.notificationsService.findForUser(user.userId, unread === 'true', cursor);
   }
 
   @Patch(':id/read')

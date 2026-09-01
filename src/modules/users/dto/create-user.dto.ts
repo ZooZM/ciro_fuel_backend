@@ -1,39 +1,50 @@
 import { Type } from 'class-transformer';
 import {
-  ArrayMinSize,
-  IsArray,
   IsEmail,
   IsEnum,
   IsIn,
-  IsNumber,
   IsOptional,
   IsString,
-  Min,
+  Matches,
   MinLength,
   ValidateNested,
 } from 'class-validator';
+import { E164_PATTERN } from '../../../common/constants/phone';
 import { UserRole } from '../../../common/enums/user-role.enum';
-import { FuelType } from '../../../common/enums/fuel-type.enum';
+import { GovernorateCode, RegionCode } from '../../../common/enums/region.enum';
 import { GeoPointDto } from '../../orders/dto/create-order.dto';
 
-class TruckDto {
+/** Spec 004 US3 — captured at client registration: region/governorate for
+ * routing (FR-014), the dropped pin, and the (geocode-suggested, user-edited)
+ * address text. Region/governorate pairing is checked in the controller
+ * against `regions.constants.ts`, the source of truth for which
+ * governorate belongs to which region — not duplicated here as decorators. */
+export class StationDto {
+  @IsEnum(RegionCode)
+  regionCode!: RegionCode;
+
+  @IsEnum(GovernorateCode)
+  governorateCode!: GovernorateCode;
+
+  @ValidateNested()
+  @Type(() => GeoPointDto)
+  location!: GeoPointDto;
+
+  // May be empty — FR-013: a failed/unavailable geocode lookup must not
+  // block registration, so this is not @IsNotEmpty().
+  @IsOptional()
   @IsString()
-  @MinLength(1)
-  plateNumber!: string;
+  addressText?: string;
 
-  @IsNumber()
-  @Min(1)
-  maxCapacityLiters!: number;
-
-  @IsArray()
-  @ArrayMinSize(1)
-  @IsEnum(FuelType, { each: true })
-  fuelTypes!: FuelType[];
+  @IsOptional()
+  @IsString()
+  name?: string;
 }
 
 export class CreateUserDto {
-  // Company Admins provision CLIENT/DRIVER accounts only — COMPANY_ADMIN
-  // accounts are created exclusively via company registration (T058).
+  // A FUEL_COMPANY_ADMIN provisions CLIENT/DRIVER accounts only —
+  // FUEL_COMPANY_ADMIN and TRANSPORT_COMPANY_ADMIN accounts are created
+  // exclusively via company registration, never through this endpoint.
   @IsIn([UserRole.CLIENT, UserRole.DRIVER])
   role!: UserRole.CLIENT | UserRole.DRIVER;
 
@@ -48,16 +59,11 @@ export class CreateUserDto {
   @MinLength(2)
   fullName!: string;
 
-  @IsString()
+  @Matches(E164_PATTERN, { message: 'phone must be a valid E.164 number' })
   phone!: string;
 
   @IsOptional()
   @ValidateNested()
-  @Type(() => GeoPointDto)
-  stationLocation?: GeoPointDto;
-
-  @IsOptional()
-  @ValidateNested()
-  @Type(() => TruckDto)
-  truck?: TruckDto;
+  @Type(() => StationDto)
+  station?: StationDto;
 }

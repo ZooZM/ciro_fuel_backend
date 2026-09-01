@@ -7,10 +7,21 @@ import { UsersService } from '../src/modules/users/users.service';
 import { UserRole } from '../src/common/enums/user-role.enum';
 import { FuelType } from '../src/common/enums/fuel-type.enum';
 import { CompanyStatus } from '../src/common/enums/company-status.enum';
+import { CompanyType } from '../src/common/enums/company-type.enum';
+import { GovernorateCode, RegionCode } from '../src/common/enums/region.enum';
+import { TrucksService } from '../src/modules/trucks/trucks.service';
+import { TanksService } from '../src/modules/tanks/tanks.service';
+import { TankMaterial } from '../src/common/enums/tank-material.enum';
+import { WarehousesService } from '../src/modules/warehouses/warehouses.service';
 
 const COMPANY_COUNT = 50;
 const USERS_PER_COMPANY = 10; // 1 admin + 4 clients + 5 drivers ≈ 500 total users
 const PASSWORD = 'LoadTest123!';
+
+// CLIENT/DRIVER phones are login identifiers and unique platform-wide. The
+// `+96658` prefix keeps load-test numbers clear of hand-written fixture phones.
+let phoneSeq = 0;
+const nextPhone = (): string => `+96658${String(++phoneSeq).padStart(7, '0')}`;
 
 /**
  * Seeds SC-008's scale target (50 tenants / ~500 users) so a load tool
@@ -22,11 +33,27 @@ async function seed(): Promise<void> {
   const app = await NestFactory.createApplicationContext(AppModule, { logger: false });
   const companiesService = app.get(CompaniesService);
   const usersService = app.get(UsersService);
+  const trucksService = app.get(TrucksService);
+  const tanksService = app.get(TanksService);
+  const warehousesService = app.get(WarehousesService);
 
   try {
+    // spec 008 FR-035f: assignment refuses without a warehouse supplying the
+    // order's grade — one covering every fuel type this script seeds is
+    // enough for the whole run (`findNearestSupplying` has no distance cap).
+    await warehousesService.create({
+      name: 'Load Test Warehouse',
+      location: { longitude: 46.6753, latitude: 24.7136 },
+      addressText: 'Load test warehouse',
+      region: RegionCode.RIYADH,
+      governorate: GovernorateCode.RIYADH_CITY,
+      fuelTypes: [FuelType.DIESEL],
+    });
+
     for (let c = 0; c < COMPANY_COUNT; c++) {
       const company = await companiesService.create({
         name: `Load Test Co ${c}`,
+        type: CompanyType.FUEL,
         status: CompanyStatus.ACTIVE,
         contactEmail: `contact${c}@loadtest.example`,
         contactPhone: '+966500000000',
@@ -35,11 +62,11 @@ async function seed(): Promise<void> {
 
       await usersService.create({
         companyId: company._id as never,
-        role: UserRole.COMPANY_ADMIN,
+        role: UserRole.FUEL_COMPANY_ADMIN,
         email: `admin${c}@loadtest.example`,
         password: PASSWORD,
         fullName: `Load Admin ${c}`,
-        phone: '+966500000001',
+        phone: nextPhone(),
         isActive: true,
       });
 
@@ -50,9 +77,14 @@ async function seed(): Promise<void> {
           email: `client${c}-${i}@loadtest.example`,
           password: PASSWORD,
           fullName: `Load Client ${c}-${i}`,
-          phone: '+966500000002',
+          phone: nextPhone(),
           isActive: true,
-          stationLocation: { type: 'Point', coordinates: [46.6753 + i * 0.01, 24.7136] } as never,
+          station: {
+            regionCode: RegionCode.RIYADH,
+            governorateCode: GovernorateCode.RIYADH_CITY,
+            location: { type: 'Point', coordinates: [46.6753 + i * 0.01, 24.7136] },
+            addressText: '',
+          } as never,
         });
       }
 
@@ -63,17 +95,26 @@ async function seed(): Promise<void> {
           email: `driver${c}-${i}@loadtest.example`,
           password: PASSWORD,
           fullName: `Load Driver ${c}-${i}`,
-          phone: '+966500000003',
+          phone: nextPhone(),
           isActive: true,
           isOnline: true,
           isAvailable: true,
           lastSeenAt: new Date(),
           location: { type: 'Point', coordinates: [46.6753, 24.7136 + i * 0.01] } as never,
-          truck: {
-            plateNumber: `LT-${c}-${i}`,
-            maxCapacityLiters: 5000,
-            fuelTypes: [FuelType.DIESEL],
-          } as never,
+        });
+
+        // spec 008 (research R12): a real Truck/Tank pair replaces the
+        // driver's deleted embedded truck — one of each per seeded driver,
+        // matching the capacity/grade the old embedded truck used to carry.
+        const truck = await trucksService.create(String(company._id), {
+          plateNumber: `LT-${c}-${i}`,
+        });
+        await trucksService.pairCard(String(truck._id), `LT-CARD-${c}-${i}`);
+        await tanksService.create(String(company._id), {
+          code: `LT-TANK-${c}-${i}`,
+          material: TankMaterial.ALUMINIUM,
+          maxCapacityLiters: 5000,
+          fuelTypes: [FuelType.DIESEL],
         });
       }
 

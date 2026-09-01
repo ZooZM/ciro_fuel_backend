@@ -48,13 +48,27 @@ services:
     ports:
       - "3000:3000"
     environment:
-      NODE_ENV: production
       PORT: 3000
       MONGODB_URI: mongodb://mongo:27017/ciro_fuel?replicaSet=rs0
       REDIS_URL: redis://redis:6379
+    # DEVELOPMENT ONLY (spec 012 T079). `docker-compose.prod.yml` has no
+    # `env_file` at all: production fetches secrets at startup from the managed
+    # store via the VM's attached identity (FR-043), so no image, snapshot or
+    # backup contains one. `.env` is in both `.gitignore` and `.dockerignore`,
+    # so it reaches neither the repository nor the build context — this line
+    # mounts it at RUN time, into a stack that never leaves a developer machine.
     env_file:
       - .env
     volumes:
+      # LOCAL DRIVER ONLY (spec 012 T070). Development runs STORAGE_DRIVER=local
+      # and writes a real `sys_storge` directory, so this mount is what makes
+      # uploads survive a container rebuild on a developer's machine.
+      #
+      # `docker-compose.prod.yml` deliberately has NO equivalent: production runs
+      # STORAGE_DRIVER=gcs and documents live in the regional bucket (FR-036),
+      # so durability is the bucket's rather than one disk's. Keeping a mount
+      # there would be a directory nothing ever writes to, quietly implying a
+      # local copy exists.
       - ./sys_storge:/app/sys_storge
 
 volumes:

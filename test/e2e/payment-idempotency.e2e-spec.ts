@@ -3,7 +3,6 @@ import { createHmac } from 'node:crypto';
 import { INestApplication } from '@nestjs/common';
 import { createTestApp, TestAppContext } from '../utils/test-app.factory';
 import { seedTwoCompanies, TwoCompanyFixture } from '../utils/fixtures';
-import { UsersService } from '../../src/modules/users/users.service';
 import { OrderStatus } from '../../src/common/enums/order-status.enum';
 
 jest.setTimeout(120_000);
@@ -42,6 +41,10 @@ describe('Payment webhook idempotency & timeout (US1)', () => {
     );
   });
 
+  /** Approves a DIRECT order (the default), reaching PENDING_PAYMENT right
+   * away (spec 004 FR-020a) — no driver exists yet at this point, since
+   * routing itself only resumes once this payment settles. This is the
+   * precondition every payment-webhook test in this file assumes. */
   async function createApprovedOrder(): Promise<{ orderId: string; finalPrice: number }> {
     const { client, admin } = fixtures.companyA;
     const server = app.getHttpServer();
@@ -55,6 +58,7 @@ describe('Payment webhook idempotency & timeout (US1)', () => {
       .set('Authorization', `Bearer ${admin.token}`)
       .send({})
       .expect(200);
+    expect(approveRes.body.status).toBe(OrderStatus.PENDING_PAYMENT);
     return { orderId: createRes.body._id, finalPrice: approveRes.body.finalPrice };
   }
 
@@ -113,7 +117,9 @@ describe('Payment webhook idempotency & timeout (US1)', () => {
       .get(`/api/v1/orders/${orderId}`)
       .set('Authorization', `Bearer ${fixtures.companyA.admin.token}`)
       .expect(200);
-    expect(order.body.status).toBe(OrderStatus.IN_TRANSIT);
+    // Settlement unblocks routing (FR-020a) — auto-routes to the fixture's
+    // sole transporter, same as a DEFERRED/CREDIT order's approval always did.
+    expect(order.body.status).toBe(OrderStatus.ROUTED_TO_TRANSPORT);
   });
 
   it('flags an amount mismatch without changing order state', async () => {
@@ -145,21 +151,13 @@ describe('Payment webhook idempotency & timeout (US1)', () => {
     expect(order.body.status).toBe(OrderStatus.PENDING_PAYMENT);
   });
 
-  it('releases the driver and reverts to APPROVED when the payment deadline expires', async () => {
-    const { client, admin, driver } = fixtures.companyA;
+  it('reverts to APPROVED when the payment deadline expires (no driver ever assigned)', async () => {
+    const { admin } = fixtures.companyA;
     const server = app.getHttpServer();
 
-    const createRes = await request(server)
-      .post('/api/v1/orders')
-      .set('Authorization', `Bearer ${client.token}`)
-      .send({ fuelType: 'DIESEL', quantityLiters: 150 })
-      .expect(201);
-    await request(server)
-      .patch(`/api/v1/orders/${createRes.body._id}/approve`)
-      .set('Authorization', `Bearer ${admin.token}`)
-      .send({})
-      .expect(200);
-    const orderId = createRes.body._id;
+    // DIRECT (the default): approval alone reaches PENDING_PAYMENT — routing,
+    // and therefore driver assignment, hasn't happened yet (spec 004 FR-020a).
+    const { orderId } = await createApprovedOrder();
 
     // Manually fire the BullMQ processor logic by waiting for the deadline is
     // impractical in a test (30 min default); instead exercise the processor
@@ -175,10 +173,7 @@ describe('Payment webhook idempotency & timeout (US1)', () => {
       .expect(200);
     expect(reverted.body.status).toBe(OrderStatus.APPROVED);
     expect(reverted.body.paymentTimeoutCount).toBe(1);
-
-    const driverDoc = await app.get(UsersService).findById(driver.id);
-    expect(driverDoc.isAvailable).toBe(true);
-    expect(driverDoc.activeOrderId).toBeUndefined();
+    expect(reverted.body.driverId).toBeFalsy();
 
     // A late webhook after the timeout is treated as out-of-sequence, not applied.
     const { rawBody, signature } = sign(

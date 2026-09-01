@@ -1,24 +1,32 @@
+import { join } from 'node:path';
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe, VersioningType } from '@nestjs/common';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
-import helmet from 'helmet';
 import { AppModule } from './app.module';
-import { HttpExceptionFilter } from './common/filters/http-exception.filter';
+import { configureApp } from './bootstrap/configure-app';
+import { loadSecrets } from './secrets/secrets-loader';
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule, { rawBody: true });
+  // BEFORE NestFactory.create, and the ordering is the design (spec 012
+  // research R8). `ConfigModule.forRoot` validates process.env with Joi at
+  // construction time, so a Nest custom loader would run AFTER Joi and fail
+  // validation before it ever loaded anything. Fetching into process.env first
+  // means configuration.ts and validation.ts are untouched, and Joi stays the
+  // single thing that fails on an absent secret (FR-049).
+  //
+  // A no-op unless SECRETS_DRIVER=gcp, so development and every test are
+  // unaffected (FR-048). It THROWS on failure and nothing catches it: the
+  // process exits without binding a port, so a partially-configured instance
+  // never serves and never reports ready (FR-046).
+  await loadSecrets();
 
-  app.use(helmet());
-  app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
-  app.setGlobalPrefix('api');
-  app.useGlobalPipes(
-    new ValidationPipe({
-      whitelist: true,
-      forbidNonWhitelisted: true,
-      transform: true,
-    }),
-  );
-  app.useGlobalFilters(new HttpExceptionFilter());
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true });
+
+  // Everything that shapes how the app handles a request lives in configureApp,
+  // which the e2e factory calls too — so the suites exercise the same
+  // configuration production runs (spec 012 research R1). Nothing that belongs
+  // there should be added back here.
+  configureApp(app);
 
   if (process.env.NODE_ENV !== 'production') {
     const config = new DocumentBuilder()
@@ -29,6 +37,14 @@ async function bootstrap(): Promise<void> {
       .build();
     const document = SwaggerModule.createDocument(app, config);
     SwaggerModule.setup('docs', app, document);
+
+    // Manual order-lifecycle test dashboard (`public/`), served same-origin so
+    // it needs neither CORS nor a helmet CSP exemption. Dev/staging only — it
+    // is a multi-role test console, never something a production origin hosts.
+    //
+    // Swagger and this console are genuinely production-excluded, which is why
+    // they stay here rather than moving into configureApp.
+    app.useStaticAssets(join(process.cwd(), 'public'), { prefix: '/dashboard' });
   }
 
   const port = process.env.PORT ?? 3000;

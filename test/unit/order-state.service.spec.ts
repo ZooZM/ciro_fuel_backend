@@ -18,7 +18,7 @@ describe('OrderStateService', () => {
 
   const actor = {
     actorId: new mongoose.Types.ObjectId().toString(),
-    actorRole: UserRole.COMPANY_ADMIN,
+    actorRole: UserRole.FUEL_COMPANY_ADMIN,
   };
 
   beforeAll(async () => {
@@ -42,7 +42,7 @@ describe('OrderStateService', () => {
 
   async function seedOrder(status: OrderStatus): Promise<OrderDocument> {
     return OrderModel.create({
-      companyId: new mongoose.Types.ObjectId(),
+      fuelCompanyId: new mongoose.Types.ObjectId(),
       clientId: new mongoose.Types.ObjectId(),
       fuelType: FuelType.DIESEL,
       quantityLiters: 1000,
@@ -61,17 +61,58 @@ describe('OrderStateService', () => {
     [OrderStatus.PENDING_APPROVAL, OrderStatus.APPROVED, false],
     [OrderStatus.PENDING_APPROVAL, OrderStatus.REJECTED, false],
     [OrderStatus.PENDING_APPROVAL, OrderStatus.CANCELLED, false],
-    [OrderStatus.APPROVED, OrderStatus.ASSIGNED_TO_DRIVER, false],
+    // spec 004: APPROVED branches into routing rather than assigning a
+    // driver directly.
+    // spec 004 US5: a DIRECT invoice sends APPROVED to PENDING_PAYMENT
+    // first (FR-020a); DEFERRED/CREDIT route immediately, same as before.
+    [OrderStatus.APPROVED, OrderStatus.PENDING_PAYMENT, false],
+    [OrderStatus.APPROVED, OrderStatus.AWAITING_ROUTING, false],
+    [OrderStatus.APPROVED, OrderStatus.ROUTED_TO_TRANSPORT, false],
     [OrderStatus.APPROVED, OrderStatus.CANCELLED, false],
-    [OrderStatus.ASSIGNED_TO_DRIVER, OrderStatus.PENDING_PAYMENT, false],
+    [OrderStatus.AWAITING_ROUTING, OrderStatus.ROUTED_TO_TRANSPORT, false],
+    [OrderStatus.AWAITING_ROUTING, OrderStatus.CANCELLED, false],
+    [OrderStatus.ROUTED_TO_TRANSPORT, OrderStatus.ASSIGNED_TO_DRIVER, false],
+    [OrderStatus.ROUTED_TO_TRANSPORT, OrderStatus.CANCELLED, false],
+    // spec 008 FR-046a: assignment no longer auto-advances to IN_TRANSIT —
+    // it stops here pending departure verification (or an override), which
+    // is what reaches LOADING.
+    [OrderStatus.ASSIGNED_TO_DRIVER, OrderStatus.LOADING, false],
     [OrderStatus.ASSIGNED_TO_DRIVER, OrderStatus.CANCELLED, false],
-    [OrderStatus.PENDING_PAYMENT, OrderStatus.IN_TRANSIT, false],
+    // Settlement and the payment-deadline timeout share this edge (both land
+    // back on APPROVED — settlement then resumes routing, a timeout awaits redispatch).
     [OrderStatus.PENDING_PAYMENT, OrderStatus.APPROVED, false],
     [OrderStatus.PENDING_PAYMENT, OrderStatus.CANCELLED, false],
+    // spec 008 FR-046d/FR-046e: loading confirmation (or override) reaches
+    // IN_TRANSIT; cancellation stays reachable; DELIVERED is force-complete only.
+    [OrderStatus.LOADING, OrderStatus.IN_TRANSIT, false],
+    [OrderStatus.LOADING, OrderStatus.CANCELLED, false],
+    [OrderStatus.LOADING, OrderStatus.DELIVERED, true],
     [OrderStatus.IN_TRANSIT, OrderStatus.UNLOADING, false],
     [OrderStatus.IN_TRANSIT, OrderStatus.DELIVERED, true], // force-complete only
     [OrderStatus.UNLOADING, OrderStatus.DELIVERED, false],
   ];
+
+  // spec 008 FR-046a: the edge assignDriver used to auto-traverse is
+  // removed outright — asserted separately from LEGAL_EDGES since this is
+  // a NEGATIVE case, not a row that would ever belong in that table.
+  it('rejects ASSIGNED_TO_DRIVER -> IN_TRANSIT (removed — LOADING sits between them now)', async () => {
+    const order = await seedOrder(OrderStatus.ASSIGNED_TO_DRIVER);
+    await expect(
+      service.transition(
+        String(order._id),
+        OrderStatus.ASSIGNED_TO_DRIVER,
+        OrderStatus.IN_TRANSIT,
+        actor,
+      ),
+    ).rejects.toThrow(ConflictException);
+  });
+
+  it('rejects LOADING -> DELIVERED without manualOverride (must go through IN_TRANSIT/UNLOADING)', async () => {
+    const order = await seedOrder(OrderStatus.LOADING);
+    await expect(
+      service.transition(String(order._id), OrderStatus.LOADING, OrderStatus.DELIVERED, actor),
+    ).rejects.toThrow(ConflictException);
+  });
 
   it.each(LEGAL_EDGES)('allows %s -> %s (manualOverride=%s)', async (from, to, manualOverride) => {
     const order = await seedOrder(from);

@@ -3,7 +3,12 @@ import { createHmac } from 'node:crypto';
 import { io, Socket as ClientSocket } from 'socket.io-client';
 import { INestApplication } from '@nestjs/common';
 import { createTestApp, TestAppContext } from '../utils/test-app.factory';
-import { seedTwoCompanies, TwoCompanyFixture } from '../utils/fixtures';
+import {
+  seedTwoCompanies,
+  TwoCompanyFixture,
+  assignAndDepart,
+  resetFixtureDispatchState,
+} from '../utils/fixtures';
 
 jest.setTimeout(120_000);
 
@@ -67,11 +72,15 @@ describe('Real-time tracking (US4) — displacement/heartbeat policy & authoriza
       { _id: fixtures.companyA.driver.id },
       { $set: { isAvailable: true }, $unset: { activeOrderId: '' } },
     );
+    await resetFixtureDispatchState(app, fixtures.companyA);
   });
 
   async function bringOrderToInTransit(): Promise<string> {
-    const { client, admin } = fixtures.companyA;
+    const { client, admin, driver, transportAdmin, truck, tank } = fixtures.companyA;
     const server = app.getHttpServer();
+    // DIRECT (the default): approval reaches PENDING_PAYMENT immediately;
+    // routing — and therefore driver assignment — only resumes once the
+    // webhook settles it (spec 004 FR-020a).
     const createRes = await request(server)
       .post('/api/v1/orders')
       .set('Authorization', `Bearer ${client.token}`)
@@ -100,11 +109,86 @@ describe('Real-time tracking (US4) — displacement/heartbeat policy & authoriza
       .set('X-Signature', signature)
       .send(rawBody)
       .expect(201);
+    await assignAndDepart(
+      app,
+      orderId,
+      transportAdmin.token,
+      driver.token,
+      driver.id,
+      truck.id,
+      tank.id,
+      truck.nfcCardUid,
+    );
     return orderId;
   }
 
   it('rejects a connection with an invalid token (connect_error)', async () => {
     await expect(connectSocket(ctx.url, 'not-a-real-jwt')).rejects.toBeDefined();
+  });
+
+  // Regression: an idle driver's position used to be rejected with
+  // NO_ACTIVE_ORDER, which deadlocked dispatch. `findCandidates` runs
+  // `$geoNear`, and `$geoNear` omits any document without `location`, so a
+  // driver could not be assigned a first order until they had a location,
+  // and could not record a location until they had been assigned one. The
+  // e2e fixtures hid it by writing `location` straight into Mongo.
+  it('records an idle driver’s position, so a driver with no location can become dispatchable', async () => {
+    const { getModelToken } = await import('@nestjs/mongoose');
+    const { User } = await import('../../src/modules/users/schemas/user.schema');
+    const userModel = app.get(getModelToken(User.name));
+    const { driver } = fixtures.companyA;
+
+    // Snapshot and restore: this file's other tests share the one fixture
+    // driver, and a position left behind here would put the displacement
+    // test below its threshold before it starts.
+    const before = await userModel.findById(driver.id).lean().exec();
+    const restore = async () => {
+      // Each field restored on its own: Mongoose drops `$set: { x: undefined }`
+      // silently, so a field that was absent has to be `$unset` explicitly.
+      // Leaving a fresh `locationUpdatedAt` behind would put the next test
+      // inside the 5s abuse ceiling and fail it as BELOW_THRESHOLD.
+      const $set: Record<string, unknown> = {};
+      const $unset: Record<string, string> = {};
+      (before.location ? $set : $unset).location = before.location ?? '';
+      (before.locationUpdatedAt ? $set : $unset).locationUpdatedAt = before.locationUpdatedAt ?? '';
+      await userModel.updateOne(
+        { _id: driver.id },
+        {
+          ...(Object.keys($set).length ? { $set } : {}),
+          ...(Object.keys($unset).length ? { $unset } : {}),
+        },
+      );
+    };
+
+    // A genuinely new driver: online, available, carrying nothing, and —
+    // crucially — with no position on file, exactly as `POST /users` leaves
+    // them.
+    await userModel.updateOne(
+      { _id: driver.id },
+      { $unset: { location: '', locationUpdatedAt: '', activeOrderId: '' } },
+    );
+
+    const socket = await connectSocket(ctx.url, driver.token);
+    openSockets.push(socket);
+
+    const ack = await ackOf<{ ok: boolean; accepted?: boolean; error?: string }>(
+      socket,
+      'location:update',
+      { lat: 24.7136, lng: 46.6753, recordedAt: new Date().toISOString() },
+    );
+
+    expect(ack.error).toBeUndefined();
+    expect(ack).toMatchObject({ ok: true, accepted: true });
+
+    const stored = await userModel.findById(driver.id).lean().exec();
+    expect(stored.location).toMatchObject({
+      type: 'Point',
+      // [lng, lat] — GeoJSON order, the reverse of the payload's.
+      coordinates: [46.6753, 24.7136],
+    });
+
+    socket.disconnect();
+    await restore();
   });
 
   it('broadcasts on >50m displacement, drops sub-threshold moves, and accepts on heartbeat', async () => {

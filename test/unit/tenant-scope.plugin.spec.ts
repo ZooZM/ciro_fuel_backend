@@ -51,7 +51,7 @@ describe('tenantScopePlugin', () => {
 
   it('injects companyId on save for a scoped role', async () => {
     await tenantContext.run(
-      { userId: 'u1', role: UserRole.COMPANY_ADMIN, companyId: COMPANY_A },
+      { userId: 'u1', role: UserRole.FUEL_COMPANY_ADMIN, companyId: COMPANY_A },
       async () => {
         const doc = await WidgetModel.create({ name: 'foo' });
         expect(doc.companyId?.toString()).toBe(COMPANY_A);
@@ -70,7 +70,7 @@ describe('tenantScopePlugin', () => {
     });
 
     await tenantContext.run(
-      { userId: 'u1', role: UserRole.COMPANY_ADMIN, companyId: COMPANY_A },
+      { userId: 'u1', role: UserRole.FUEL_COMPANY_ADMIN, companyId: COMPANY_A },
       async () => {
         const results = await WidgetModel.find({}).exec();
         expect(results).toHaveLength(1);
@@ -90,7 +90,7 @@ describe('tenantScopePlugin', () => {
     });
 
     await tenantContext.run(
-      { userId: 'u1', role: UserRole.COMPANY_ADMIN, companyId: COMPANY_A },
+      { userId: 'u1', role: UserRole.FUEL_COMPANY_ADMIN, companyId: COMPANY_A },
       async () => {
         // Attempt to escape scoping by explicitly filtering for company B's id —
         // the plugin must override this back to the actor's own tenant (company A),
@@ -144,7 +144,7 @@ describe('tenantScopePlugin', () => {
     });
 
     await tenantContext.run(
-      { userId: 'u1', role: UserRole.COMPANY_ADMIN, companyId: COMPANY_A },
+      { userId: 'u1', role: UserRole.FUEL_COMPANY_ADMIN, companyId: COMPANY_A },
       async () => {
         const results = await WidgetModel.aggregate([{ $sort: { name: 1 } }]).exec();
         expect(results).toHaveLength(1);
@@ -184,7 +184,7 @@ describe('tenantScopePlugin', () => {
     });
 
     await tenantContext.run(
-      { userId: 'u1', role: UserRole.COMPANY_ADMIN, companyId: COMPANY_A },
+      { userId: 'u1', role: UserRole.FUEL_COMPANY_ADMIN, companyId: COMPANY_A },
       async () => {
         const results = await GeoWidgetModel.aggregate([
           {
