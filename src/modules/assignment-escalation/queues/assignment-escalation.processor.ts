@@ -12,10 +12,7 @@ import { SMS_SENDER, SmsSender } from '../../../common/sms/sms-sender.port';
 import { ASSIGNMENT_ESCALATION_QUEUE } from './assignment-escalation-queue.service';
 import { TenantContextService } from '../../../common/context/tenant-context.service';
 import { attachQueueErrorHandler } from '../../../common/queues/queue-error-handling';
-import {
-  CorrelatedJobData,
-  runWithJobCorrelation,
-} from '../../../common/logging/job-correlation';
+import { CorrelatedJobData, runWithJobCorrelation } from '../../../common/logging/job-correlation';
 
 // spec 010 FR-013a: BullMQ's own Worker `limiter` — jobs that become due while it is
 // saturated simply wait longer in the queue, never dropped (research R4). Read directly
@@ -109,7 +106,11 @@ export class AssignmentEscalationProcessor extends WorkerHost implements OnModul
     // history (`OrdersService.releaseDriverIfAssigned` only clears the
     // driver's own `activeOrderId`), so `status` is the only reliable
     // signal here.
-    if (order.assignmentAcknowledgedAt || !order.driverId || order.status === OrderStatus.CANCELLED) {
+    if (
+      order.assignmentAcknowledgedAt ||
+      !order.driverId ||
+      order.status === OrderStatus.CANCELLED
+    ) {
       this.logger.debug({ orderId }, 'Assignment escalation skipped — no longer applicable');
       return;
     }

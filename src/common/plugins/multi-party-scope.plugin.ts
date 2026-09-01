@@ -122,9 +122,7 @@ export function createMultiPartyScopePlugin(tenantContext: TenantContextService)
     // `{ clientId: undefined }` — a filter Mongo reads as "clientId does not
     // exist", which matches other tenants' orders rather than none. Fail closed.
     if (!ctx.userId) {
-      throw new Error(
-        'Multi-party isolation violation: context has a role but no userId',
-      );
+      throw new Error('Multi-party isolation violation: context has a role but no userId');
     }
 
     switch (ctx.role) {

@@ -4,10 +4,10 @@ Active feature — read this plan first: `specs/012-production-hardening/plan.md
 silent failure, **without changing one byte of platform behaviour** — a liveness signal, graceful
 shutdown, production CORS, proxy-aware rate limiting, structured logs, durable document storage,
 managed secrets, database resilience, and the removal of the constraints that make redundancy
-impossible). **Planned, not yet implemented.** Supporting artifacts: `spec.md` (9 stories, 110 FRs,
+impossible). **Implemented — 124 of 125 tasks complete.** Supporting artifacts: `spec.md` (9 stories, 110 FRs,
 20 SCs, 12 clarifications resolved across two sessions), `research.md` (12 decisions — R1/R4/R5 and
 R9–R12 each overturn something the spec, the clarification sessions, or the contracts assumed),
-`data-model.md`, `quickstart.md`, `tasks.md` (123 tasks), `contracts/health-contract.md`,
+`data-model.md`, `quickstart.md`, `tasks.md` (125 tasks), `contracts/health-contract.md`,
 `contracts/rest-api-delta.md`, `contracts/config-contract.md`, `contracts/operations-contract.md`.
 Two `/speckit-analyze` passes were run; the first found 10 issues (1 critical) and the second 10
 more, all resolved — the second pass's value was catching that the first round's fixes had left
@@ -18,6 +18,51 @@ Docker Compose stack behind nginx — unmanaged compute, but the surrounding man
 same project *are* used: a regional GCS bucket for documents, Secret Manager for secrets, Cloud
 Logging for records. What the deployment does **not** supply is orchestration, so the rolling deploy,
 the scheduler arbitration and the sweep-stall alert are all things this feature builds.
+
+**Implementation status**: all 9 user stories built and verified. Backend `npm run lint:check`
+clean, `npm run build` clean, `npm run test` **175/175 across 21 suites**, `npm run test:e2e`
+**340/340 across 62 suites**. Both clients confirmed unchanged (FR-067): mobile `flutter test` 418
+passing with the same two documented pre-existing non-green tests (`login_screen_golden_test` pixel
+diff, `auth_session_test` `skip: true`); dashboard `vitest run` 49 passing with the same two
+pre-existing suites that fail to *load*, and `tsc -b --force` reporting the same pre-existing
+unused-import errors feature 011 already disclosed. Quickstart Parts 0–2 walked end to end against a
+real server (results recorded at the foot of `quickstart.md`). New suites: `health`, `cors`,
+`rate-limit-proxy`, `graceful-shutdown`, `request-logging`, `file-storage`, `db-resilience`,
+`redis-degradation`, `multi-instance`, plus unit `secrets-loader`. New operational deliverables:
+`nginx/nginx.conf`, `nginx/upstream.conf`, `scripts/readiness-monitor.sh`,
+`scripts/rolling-deploy.sh`, `docker-compose.prod.yml`.
+
+**Not completed — needs a named person, not a session**: T110 alone, the FR-072 pre-launch
+checklist's owners and dates. Also unproven, because the infrastructure does not exist yet (no VMs,
+bucket, secret store or log sink — operations-contract §1): quickstart Part 1's two-instance nginx
+section and all of Part 3. The two-instance *guarantees* are covered automatically by
+`test/e2e/multi-instance.e2e-spec.ts`; what remains unverified is the nginx, monitor and rolling-deploy
+machinery itself, which is exactly what §7's checklist tracks.
+
+**Corrections found while implementing** — the full log is in `tasks.md`'s *Corrections* section;
+the ones that would have shipped silently:
+· **`INSTANCE_ID` resolved to `''` on any deployment that did not set it**, so FR-035a had no answer
+in a single record or either health response — Joi's `.default('')` is written back into
+`process.env`, and `??` does not treat `''` as absent (`??` → `||`).
+· **`CORS_ALLOWED_ORIGINS=` (set but empty) was ACCEPTED in production**, defeating FR-018 by the
+likeliest route: Joi keeps a base `.allow('')` when merging the conditional schema, so `.min(1)` and
+`.required()` were both short-circuited. **`GCS_BUCKET` and `GCP_PROJECT_ID` had the identical
+hole.** Found by walking the quickstart against a real server, not by any suite.
+· **The Redis socket adapter never attached** — `afterInit` hands a *namespace*, not the root
+`Server`, and `Namespace.adapter` is a property, not a method. The throw was caught and logged, so
+every single-instance test passed while cross-instance delivery was silently dead. Only
+`multi-instance.e2e-spec.ts` could see it.
+· **pino's `customProps` decorates only the request-completion record**, so no background job's
+records carried a correlation id — FR-030 half-implemented in exactly the way the plan warned about.
+Replaced with a `mixin`; the request record, emitted from `res.on('finish')` *outside* the
+AsyncLocalStorage scope, reads its fields off `req` instead.
+· **An unhandled `'error'` event on a BullMQ queue crashes the process** — which would have turned
+the Redis degradation Q7 designed for into an instance crash.
+· **Establishing a correlation id on public routes nearly broke every login**: both scoping plugins
+bypassed on `!ctx`, and an anonymous store with no `role` falls into the authenticated branch. The
+discriminator is now `!ctx?.role`.
+· **A scheduled sweep firing during the drain made a clean shutdown report itself as failed** —
+`beginDraining` now stops every cron and interval first.
 
 **The keystone finding, which inverts the obvious implementation order (research R1)**:
 `test/utils/test-app.factory.ts` does not boot the app the way `server.ts` does — it re-implements a

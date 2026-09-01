@@ -305,6 +305,12 @@ Implemented by [`src/secrets/secrets-loader.ts`](../../../src/secrets/secrets-lo
 would run after it. Nothing in `configuration.ts` or `validation.ts` changed, and Joi is still the
 single thing that fails on an absent secret.
 
+**FR-045's read auditing is verified ONLY in the live environment** (§7 item 3). The platform does
+not write those records and cannot alter them — which is the point of them, and also why no test
+here can assert them. Nothing in CI has a service identity, so a green suite says nothing whatsoever
+about whether secret reads are being audited. Treat it as unverified until item 3 is closed against
+a real project.
+
 **Rotation for an ordinary secret**: add a version, run the §3 rolling deploy.
 
 ```
@@ -412,6 +418,73 @@ cross-origin hop. It alters **no request the app sends to the platform**, which 
 inside FR-067's "no client changes": it is the single permitted exception (FR-038e), and it exists
 here so that launch week finds a task rather than a surprise.
 
+**Every row's Owner and Status column is deliberately still empty (T110).** Assigning them is a
+decision about people, not a technical step, and filling them in with a placeholder would make the
+list look closed when it is not — which is the exact failure this table exists to prevent. Five
+consecutive features in this repository ended with a live verification step outstanding and
+undiscovered; the table's value is that the outstanding work is *visible*, and a fabricated owner
+destroys that. **This is the one task in the feature that cannot be completed without a named
+person**, and it must be closed before launch.
+
 Item 9 is not a technical task and has no technical fallback. The platform holds continuous driver
 location traces, and this feature is what causes that data to be written to new places. It is
 tracked as a risk rather than a blocker only because the design is valid under either answer.
+
+
+---
+
+## 8. Data residency and provider coupling
+
+### 8.1 Personal-data inventory (FR-064d)
+
+Published here so a residency review has something concrete to review. This feature does not create
+new *categories* of personal data — it causes existing categories to be written to **new places**,
+which is exactly what makes the inventory necessary now rather than earlier.
+
+| Where | What personal data | Introduced by | Retention |
+|---|---|---|---|
+| **GCS bucket** | Commercial-register documents (company officers' names, registration numbers) and **profile photographs of drivers, clients and administrators** | Story 6 — previously on one VM's disk | Object versioning on; no lifecycle expiry — documents are commercial records |
+| **Signed URL path** | A `companyId`, visible to anyone holding a leaked URL | Story 6 | 5 minutes (`SIGNED_URL_TTL_SECONDS`) |
+| **Collected log records** | `userId`, `companyId`, `role`, **`clientIp`**, `orderId`, `correlationId` | Story 5 — previously an unparsed single-line string | Per the log sink's retention policy — **must be set deliberately; the default is not a decision** |
+| **Log records, indirectly** | An order id joins to a delivery, which carries a **driver's location trace** and a **customer's delivery address**. The records do not contain coordinates, but they make the trace retrievable by anyone who can read them | Story 5 | as above |
+| **Secret store** | No personal data. Credentials only | Story 7 | Versioned; old versions destroyed after rotation |
+
+**`clientIp` is the field most easily overlooked.** It is a personal identifier in most
+jurisdictions, it was not previously recorded in a queryable form, and it is on **every** request
+record. It is there because Story 4's whole subject is telling one client from another; that is a
+real purpose, and it is also a real disclosure.
+
+**The platform holds continuous driver location traces.** That is the fact a residency review turns
+on, and this feature is what causes it to become newly *retrievable* — by `orderId`, in under a
+minute, which is SC-007 working as designed. The capability and the exposure are the same capability.
+
+### 8.2 Region (FR-064c)
+
+Bucket, log sink and secret store are all provisioned in the **same region as the compute**, and
+none is placed elsewhere for cost or convenience. This is a **provisioning instruction, not an
+observation**: none of these resources exists yet (§1), so there is nothing to verify. §7 item 9
+carries the residency confirmation itself, which is a legal question with no technical fallback.
+
+Nothing in the application pins a region. A misplaced resource is invisible from the code and
+detectable only by inspecting the resources — which is why it is a checklist item.
+
+### 8.3 Every provider client sits behind a port (FR-064b)
+
+Reviewed at implementation. Each provider-specific client is reached through an abstraction with a
+**second working implementation** — not a second implementation in principle, but one that runs
+continuously:
+
+| Port | Production | Second implementation | Where the second one runs |
+|---|---|---|---|
+| `FileStorage` | `GcsFileStorage` | `LocalFileStorage` | Development and all 62 e2e suites |
+| `loadSecrets` | `secret-manager.driver.ts` | the `env` driver — a complete no-op | Development, every test, every seed script |
+| `SmsSender` | (unimplemented) | `NoopSmsSender` | Development and tests (pre-existing, spec 005) |
+
+The second implementation is what keeps the seam honest. A port whose only implementation is the
+vendor's drifts into that vendor's shape without anyone deciding to let it — which is how a
+notionally portable design becomes unportable while every file still looks abstract.
+
+**Deliberately NOT behind a port**: the Redis-backed pieces (BullMQ, cache, throttler counters,
+scheduler leases, the Socket.io adapter). Redis is not a managed provider here — it is a component
+the deployment runs itself, replaceable by running a different one, and wrapping it would add a seam
+with nothing on the other side of it.

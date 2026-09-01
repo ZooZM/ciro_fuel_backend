@@ -12,7 +12,10 @@ import {
 import { StopDetectionService } from '../../src/modules/stop-detection/stop-detection.service';
 import { User, UserDocument } from '../../src/modules/users/schemas/user.schema';
 import { Order, OrderDocument } from '../../src/modules/orders/schemas/order.schema';
-import { Notification, NotificationDocument } from '../../src/modules/notifications/schemas/notification.schema';
+import {
+  Notification,
+  NotificationDocument,
+} from '../../src/modules/notifications/schemas/notification.schema';
 import { OrderStatus } from '../../src/common/enums/order-status.enum';
 import { StopOrigin } from '../../src/common/enums/stop-origin.enum';
 import { NotificationType } from '../../src/common/enums/notification-type.enum';
@@ -132,7 +135,9 @@ describe('Stop detection sweep (spec 011 US1)', () => {
     expect(notification).not.toBeNull();
     // The app needs this to open the prompt for the right stop, and to
     // answer it — the reason endpoint is addressed by stopId.
-    expect(notification?.payload.stopId).toBe(String((order?.stopEvents[0] as never as { _id: unknown })._id));
+    expect(notification?.payload.stopId).toBe(
+      String((order?.stopEvents[0] as never as { _id: unknown })._id),
+    );
   });
 
   it('raises nothing for a driver who is still moving (SC-002)', async () => {
@@ -197,7 +202,9 @@ describe('Stop detection sweep (spec 011 US1)', () => {
     await orderModel
       .updateOne(
         { _id: orderId },
-        { $set: { 'stopEvents.0.reasonGivenAt': new Date(), 'stopEvents.0.resolvedAt': new Date() } },
+        {
+          $set: { 'stopEvents.0.reasonGivenAt': new Date(), 'stopEvents.0.resolvedAt': new Date() },
+        },
       )
       .exec();
 

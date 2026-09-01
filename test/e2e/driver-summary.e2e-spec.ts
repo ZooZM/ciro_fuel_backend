@@ -172,7 +172,6 @@ describe('Driver summary (spec 007 US5)', () => {
   });
 
   it("deliveredAt is set on normal completion, counting toward the driver's day", async () => {
-    const server = app.getHttpServer();
     const orderId = await assignAndDeliver(fixtures.companyA);
     const { getModelToken } = await import('@nestjs/mongoose');
     const { Order } = await import('../../src/modules/orders/schemas/order.schema');

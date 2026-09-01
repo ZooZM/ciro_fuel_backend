@@ -135,7 +135,12 @@ describe('Driver movement bookkeeping (spec 011)', () => {
       expect(haversineDistanceMeters(BASE, point)).toBeLessThan(MOVEMENT_THRESHOLD_METERS);
       pathWalkedMeters += haversineDistanceMeters(previous, point);
       previous = point;
-      await applyFix(id, point[0], point[1], new Date(`2026-01-01T10:${String((i + 1) * 3).padStart(2, '0')}:00Z`));
+      await applyFix(
+        id,
+        point[0],
+        point[1],
+        new Date(`2026-01-01T10:${String((i + 1) * 3).padStart(2, '0')}:00Z`),
+      );
     }
 
     const after = await UserModel.findById(id).exec();

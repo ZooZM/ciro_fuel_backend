@@ -34,7 +34,10 @@ describe('AssignmentEscalationProcessor', () => {
   beforeAll(async () => {
     mongod = await MongoMemoryServer.create();
     connection = await mongoose.createConnection(mongod.getUri()).asPromise();
-    OrderModel = connection.model(Order.name, OrderSchema) as unknown as mongoose.Model<OrderDocument>;
+    OrderModel = connection.model(
+      Order.name,
+      OrderSchema,
+    ) as unknown as mongoose.Model<OrderDocument>;
     UserModel = connection.model(User.name, UserSchema) as unknown as mongoose.Model<UserDocument>;
   }, 120_000);
 

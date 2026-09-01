@@ -2,10 +2,7 @@ import request from 'supertest';
 import { INestApplication } from '@nestjs/common';
 import { createTestApp, TestAppContext } from '../utils/test-app.factory';
 import { seedTwoCompanies, TwoCompanyFixture } from '../utils/fixtures';
-import {
-  deriveLocalTokenKey,
-  mintLocalToken,
-} from '../../src/common/storage/local-storage-token';
+import { deriveLocalTokenKey, mintLocalToken } from '../../src/common/storage/local-storage-token';
 
 jest.setTimeout(120_000);
 
@@ -100,9 +97,7 @@ describe('File access isolation (US5)', () => {
     // production — so each property is asserted, never assumed.
 
     it('refuses a request with no token at all', async () => {
-      await request(app.getHttpServer())
-        .get(`/api/v1/files/${companyAFileId}/content`)
-        .expect(403);
+      await request(app.getHttpServer()).get(`/api/v1/files/${companyAFileId}/content`).expect(403);
     });
 
     it('refuses a forged token', async () => {

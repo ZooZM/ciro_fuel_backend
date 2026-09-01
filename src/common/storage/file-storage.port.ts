@@ -30,11 +30,7 @@ export abstract class FileStorage {
    * persists the metadata record only after this resolves, so a storage failure
    * leaves no record pointing at nothing (FR-041).
    */
-  abstract put(params: {
-    key: string;
-    buffer: Buffer;
-    mimeType: string;
-  }): Promise<void>;
+  abstract put(params: { key: string; buffer: Buffer; mimeType: string }): Promise<void>;
 
   /**
    * A URL that serves exactly one object, for a bounded time, to a client

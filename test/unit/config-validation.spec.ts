@@ -16,6 +16,36 @@ describe('Configuration validation (spec 012)', () => {
 
   const validate = (env: Record<string, unknown>) => validationSchema.validate(env);
 
+  describe('conditionally-required values reject an EMPTY value, not just an absent one', () => {
+    // One shared defect, three variables, all introduced by spec 012 and all
+    // using the same `.allow('').default('').when(...)` idiom. Grouped here so
+    // a fourth variable added with that idiom is written against a test that
+    // already states the rule.
+    it('refuses GCS_BUCKET="" under the gcs storage driver', () => {
+      const { error } = validate({
+        ...base,
+        STORAGE_DRIVER: 'gcs',
+        GCS_BUCKET: '',
+      });
+
+      expect(error).toBeDefined();
+      expect(error?.message).toContain('GCS_BUCKET');
+    });
+
+    it('refuses GCP_PROJECT_ID="" under the gcp secrets driver', () => {
+      // The worst of the three: an empty project id reaches `loadSecrets`,
+      // which throws — but only after the process reports itself configured.
+      const { error } = validate({
+        ...base,
+        SECRETS_DRIVER: 'gcp',
+        GCP_PROJECT_ID: '',
+      });
+
+      expect(error).toBeDefined();
+      expect(error?.message).toContain('GCP_PROJECT_ID');
+    });
+  });
+
   describe('CORS_ALLOWED_ORIGINS (FR-018)', () => {
     it('REFUSES TO START in production when no origin is configured', () => {
       // This is the whole point: starting with browser access silently broken
@@ -37,6 +67,28 @@ describe('Configuration validation (spec 012)', () => {
       });
 
       expect(error).toBeUndefined();
+    });
+
+    it('REFUSES an allowlist that is SET BUT EMPTY in production', () => {
+      // The gap the "unset" case above does not cover, and the one a real
+      // deployment is far more likely to hit: `CORS_ALLOWED_ORIGINS=` in an env
+      // file, or a compose variable that resolves to empty. An empty allowlist
+      // matches nothing, so every browser request is refused — the exact
+      // outcome FR-018 exists to prevent, reached by a different route.
+      //
+      // It was ACCEPTED until this test: Joi keeps the base schema's
+      // `.allow('')` when merging the conditional one, and an explicitly
+      // permitted value short-circuits `.min(1)` and `.required()` alike. The
+      // fix is `.invalid('')` in the `then` branch.
+      const { error } = validate({
+        ...base,
+        NODE_ENV: 'production',
+        SMS_PROVIDER: 'unifonic',
+        CORS_ALLOWED_ORIGINS: '',
+      });
+
+      expect(error).toBeDefined();
+      expect(error?.message).toContain('CORS_ALLOWED_ORIGINS');
     });
 
     it('permits an empty allowlist outside production, so local development is unblocked', () => {

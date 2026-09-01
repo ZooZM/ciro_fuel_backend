@@ -2,11 +2,7 @@ import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from '@nes
 import { randomUUID } from 'node:crypto';
 import { Observable } from 'rxjs';
 import { TenantContextService } from '../context/tenant-context.service';
-import {
-  CORRELATION_ID_HEADER,
-  LOG_CONTEXT_KEY,
-  RequestLogContext,
-} from '../logging/pino.config';
+import { CORRELATION_ID_HEADER, LOG_CONTEXT_KEY, RequestLogContext } from '../logging/pino.config';
 import { AuthenticatedUser } from '../interfaces/jwt-payload.interface';
 
 @Injectable()

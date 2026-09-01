@@ -45,7 +45,9 @@ export class PresenceService {
    */
   @Cron('*/60 * * * * *') // every 60s (research R6a) — overridable via config for tests
   async sweepOfflineDrivers(): Promise<void> {
-    await this.lease.runExclusively(SWEEP_NAMES.PRESENCE_OFFLINE, () => this.markSilentDriversOffline());
+    await this.lease.runExclusively(SWEEP_NAMES.PRESENCE_OFFLINE, () =>
+      this.markSilentDriversOffline(),
+    );
   }
 
   private async markSilentDriversOffline(): Promise<void> {
@@ -76,7 +78,11 @@ export class PresenceService {
     // (operations-contract §6), so the record must be emitted by whoever
     // actually ran, at `info` so a production level of `info` still sees it.
     this.logger.log(
-      { sweep: SWEEP_NAMES.PRESENCE_OFFLINE, event: 'sweep.completed', affected: result.modifiedCount },
+      {
+        sweep: SWEEP_NAMES.PRESENCE_OFFLINE,
+        event: 'sweep.completed',
+        affected: result.modifiedCount,
+      },
       'sweep.completed',
     );
   }

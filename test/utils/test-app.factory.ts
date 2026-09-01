@@ -32,7 +32,19 @@ async function withTeardownBudget(label: string, op: () => Promise<unknown>): Pr
     timer.unref();
   });
   try {
-    const outcome = await Promise.race([op().then(() => 'done' as const), expiry]);
+    const work = op().then(() => 'done' as const);
+    // Marks `work` as handled so a LATE rejection — one that arrives after the
+    // budget expired and `expiry` already won the race — cannot become an
+    // unhandled rejection. Without this the race resolves 'expired', nothing is
+    // attached to `work` any more, and the eventual failure is reported by Jest
+    // as a suite-level error that no caller can catch: `ctx.close()` has
+    // already returned, so even wrapping it in try/catch does not help.
+    //
+    // It does NOT swallow an ordinary failure: if `work` rejects before the
+    // budget expires, `Promise.race` rejects and the catch below still sees it.
+    work.catch(() => undefined);
+
+    const outcome = await Promise.race([work, expiry]);
     if (outcome === 'expired') {
       // eslint-disable-next-line no-console
       console.warn(
@@ -40,6 +52,24 @@ async function withTeardownBudget(label: string, op: () => Promise<unknown>): Pr
           `teardown does not fail a suite whose tests all passed`,
       );
     }
+  } catch (err) {
+    // A FAILING teardown is the same category as a SLOW one, and is treated the
+    // same way: a warning, never a failed suite whose tests all passed.
+    //
+    // The concrete case (spec 012): with `minPoolSize: 2` (FR-050) the driver
+    // keeps background connections, and `MongooseCoreModule`'s
+    // `onApplicationShutdown` can reject with `MongoClientClosedError` when one
+    // is still checked out as the client closes. Nothing was lost — the app has
+    // already stopped serving — but it surfaces as a suite-level failure that no
+    // caller can catch, in whichever suite happens to be unlucky.
+    //
+    // This does NOT weaken what the shutdown story asserts.
+    // `graceful-shutdown.e2e-spec.ts` checks the close behaviours DIRECTLY —
+    // readiness turns 503, BullMQ workers stop running, Redis reports
+    // disconnected — so a genuine regression fails an assertion rather than
+    // slipping past as a tolerated teardown warning.
+    // eslint-disable-next-line no-console
+    console.warn(`[test-teardown] ${label} failed; continuing: ${String(err)}`);
   } finally {
     if (timer) clearTimeout(timer);
   }
@@ -133,6 +163,11 @@ export async function createTestApp(options: TestAppOptions = {}): Promise<TestA
     replSet,
     url,
     close: async () => {
+      // EVERY step runs, whatever the previous one did. Before spec 012 a
+      // rejecting `app.close()` skipped `replSet.stop()` entirely, leaking a
+      // live mongod for the rest of the run — which is why a suite with a
+      // failing teardown also HUNG instead of exiting, turning one bad close
+      // into a stuck process and a string of slow suites after it.
       await withTeardownBudget('app.close()', () => app.close());
       await withTeardownBudget('replSet.stop()', () => replSet.stop());
     },

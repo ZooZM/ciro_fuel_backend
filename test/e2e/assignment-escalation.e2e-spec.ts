@@ -11,7 +11,10 @@ import { OrderStatus } from '../../src/common/enums/order-status.enum';
 import { UserRole } from '../../src/common/enums/user-role.enum';
 import { TankMaterial } from '../../src/common/enums/tank-material.enum';
 import { FuelType } from '../../src/common/enums/fuel-type.enum';
-import { Notification, NotificationDocument } from '../../src/modules/notifications/schemas/notification.schema';
+import {
+  Notification,
+  NotificationDocument,
+} from '../../src/modules/notifications/schemas/notification.schema';
 import { UsersService } from '../../src/modules/users/users.service';
 import { AuthService } from '../../src/modules/auth/auth.service';
 import { TrucksService } from '../../src/modules/trucks/trucks.service';

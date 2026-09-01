@@ -91,11 +91,16 @@ export class StopEscalationProcessor extends WorkerHost implements OnModuleInit 
       return;
     }
     if (FINAL_STATUSES.includes(order.status)) {
-      this.logger.debug({ orderId, stopId, status: order.status }, 'Stop escalation skipped — delivery is final');
+      this.logger.debug(
+        { orderId, stopId, status: order.status },
+        'Stop escalation skipped — delivery is final',
+      );
       return;
     }
 
-    const stop = order.stopEvents.find((s) => String((s as never as { _id: unknown })._id) === stopId);
+    const stop = order.stopEvents.find(
+      (s) => String((s as never as { _id: unknown })._id) === stopId,
+    );
     if (!stop) {
       this.logger.warn({ orderId, stopId }, 'Stop escalation fired for unknown stop');
       return;

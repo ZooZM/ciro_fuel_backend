@@ -187,7 +187,7 @@ describe('Proof of delivery — OTP security & force-complete (US1)', () => {
    * body alone, which is exactly why this checks the database.
    */
   it('actually releases the driver, truck and tank — not just the order status (FR-044)', async () => {
-    const { driver, admin, client, transportAdmin, truck, tank } = fixtures.companyA;
+    const { driver, admin, truck, tank } = fixtures.companyA;
     const server = app.getHttpServer();
     const orderId = await bringOrderToInTransit();
 

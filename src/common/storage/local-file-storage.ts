@@ -104,10 +104,6 @@ export class LocalFileStorage extends FileStorage {
  * read that precedes signing (FR-040a). Any future code that reads tenancy out
  * of a key path is a defect.
  */
-export function buildStorageKey(
-  storageDir: string,
-  companyId: string,
-  filename: string,
-): string {
+export function buildStorageKey(storageDir: string, companyId: string, filename: string): string {
   return join(storageDir, companyId, filename);
 }
