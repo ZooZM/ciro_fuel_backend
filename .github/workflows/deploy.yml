@@ -97,26 +97,29 @@ jobs:
           gcloud compute ssh ${{ env.INSTANCE }} \
             --zone=${{ env.ZONE }} --tunnel-through-iap --quiet \
             --command="set -euo pipefail
-              cd ~/ciro
+              # /opt/ciro, not a home directory: the CI service account signs in
+              # as its own OS Login user, so ~ differs per identity. Deployment
+              # files must not depend on which human or robot is connecting.
+              cd /opt/ciro
               # Record what is running now, so a failed deploy can be rolled back.
-              grep -oP 'ciro-fuel-api:\K\S+' docker-compose.prod.yml > .previous-tag
-              sed -i 's|${{ env.IMAGE }}:[^ ]*|${{ env.IMAGE }}:${TAG}|' docker-compose.prod.yml
-              docker compose -f docker-compose.prod.yml pull app
-              docker compose -f docker-compose.prod.yml up -d app
+              grep -oP 'ciro-fuel-api:\K\S+' docker-compose.prod.yml | sudo tee .previous-tag >/dev/null
+              sudo sed -i 's|${{ env.IMAGE }}:[^ ]*|${{ env.IMAGE }}:${TAG}|' docker-compose.prod.yml
+              sudo docker compose -f docker-compose.prod.yml pull app
+              sudo docker compose -f docker-compose.prod.yml up -d app
 
               # A deploy is not finished when the container starts — it is
               # finished when the app reports itself ready. Without this the
               # pipeline goes green while a crash-looping container serves 502s.
               for i in \$(seq 1 30); do
-                if docker compose -f docker-compose.prod.yml exec -T app \
+                if sudo docker compose -f docker-compose.prod.yml exec -T app \
                      node -e \"fetch('http://127.0.0.1:3000/api/v1/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\" 2>/dev/null; then
                   echo 'ready'; exit 0
                 fi
                 sleep 5
               done
               echo 'NOT READY after 150s — rolling back'
-              sed -i \"s|${{ env.IMAGE }}:${TAG}|${{ env.IMAGE }}:\$(cat .previous-tag)|\" docker-compose.prod.yml
-              docker compose -f docker-compose.prod.yml up -d app
+              sudo sed -i \"s|${{ env.IMAGE }}:${TAG}|${{ env.IMAGE }}:\$(cat .previous-tag)|\" docker-compose.prod.yml
+              sudo docker compose -f docker-compose.prod.yml up -d app
               exit 1"
 
       - name: Report
