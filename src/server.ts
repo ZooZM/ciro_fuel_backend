@@ -2,7 +2,6 @@ import { join } from 'node:path';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
-import { AppModule } from './app.module';
 import { configureApp } from './bootstrap/configure-app';
 import { loadSecrets } from './secrets/secrets-loader';
 
@@ -19,6 +18,20 @@ async function bootstrap(): Promise<void> {
   // process exits without binding a port, so a partially-configured instance
   // never serves and never reports ready (FR-046).
   await loadSecrets();
+
+  // Imported HERE, not at module scope, and that is load-bearing.
+  //
+  // A static `import { AppModule } from './app.module'` compiles to a
+  // top-level `require`, which evaluates app.module.js — and therefore runs
+  // `ConfigModule.forRoot`'s Joi validation — BEFORE this function's body is
+  // ever reached. `loadSecrets()` would then populate process.env after Joi
+  // had already rejected it, and the process would die reporting the secrets
+  // as "required" rather than reporting why the store was not read.
+  //
+  // Invisible in development and in every test: SECRETS_DRIVER=env means
+  // process.env is already populated, so Joi passes regardless of ordering.
+  // It fails only under SECRETS_DRIVER=gcp — production alone.
+  const { AppModule } = await import('./app.module');
 
   const app = await NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true });
 

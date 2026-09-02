@@ -1,0 +1,143 @@
+# Production stack — one VM, me-central1.
+# Mongo and Redis publish NO ports: they are reachable only on this compose
+# network. The only thing listening on the public interface is Caddy.
+name: ciro-fuel
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: "10m", max-file: "3" }
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    volumes:
+      - /mnt/data/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - /mnt/data/caddy/data:/data
+      - /mnt/data/caddy/config:/config
+    depends_on: [app]
+    logging: *logging
+
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    volumes: ["/mnt/data/mongo:/data/db"]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    logging: *logging
+
+  # Idempotent: re-running it on an initiated set is a no-op.
+  mongo-init:
+    image: mongo:7
+    restart: "no"
+    depends_on:
+      mongo: { condition: service_healthy }
+    entrypoint: >
+      bash -c "mongosh --host mongo:27017 --quiet --eval '
+        try { rs.status() }
+        catch (e) { rs.initiate({_id:\"rs0\", members:[{_id:0, host:\"mongo:27017\"}]}) }
+      '"
+    logging: *logging
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: ["/mnt/data/redis:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    logging: *logging
+
+  app:
+    image: me-central1-docker.pkg.dev/ciro-fuel-prod/ciro-images/ciro-fuel-api:v1
+    restart: unless-stopped
+    depends_on:
+      mongo: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    # Must exceed SHUTDOWN_DRAIN_MS, or Docker SIGKILLs mid-drain and the
+    # graceful shutdown work is wasted on every deploy.
+    stop_grace_period: 40s
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+
+      # Secrets arrive from Secret Manager via the VM's service identity.
+      # JWT_SECRET, JWT_REFRESH_SECRET, PAYMENT_*, SMS_API_KEY,
+      # GOOGLE_MAPS_API_KEY, MONGODB_URI and REDIS_URL are NOT set here.
+      SECRETS_DRIVER: gcp
+      GCP_PROJECT_ID: ciro-fuel-prod
+
+      STORAGE_DRIVER: gcs
+      GCS_BUCKET: ciro-fuel-prod-files
+      SIGNED_URL_TTL_SECONDS: 300
+      STORAGE_DIR: sys_storge
+      MAX_FILE_SIZE_BYTES: 10485760
+
+      # ⚠ Replace with the real dashboard origin before first boot.
+      CORS_ALLOWED_ORIGINS: https://dashboard.ciro.app
+
+      # Caddy is the only proxy in front of the app — exactly one hop.
+      TRUSTED_PROXY_HOPS: 1
+
+      LOG_LEVEL: info
+      LOG_PRETTY: "false"
+      SHUTDOWN_DRAIN_MS: 30000
+      HEALTH_TIMEOUT_MS: 1000
+      INSTANCE_ID: ciro-fuel-prod-vm
+
+      # ⚠ 'none' is rejected in production — needs a real provider.
+      SMS_PROVIDER: unifonic
+      SMS_SENDER_ID: CIRO
+
+      JWT_EXPIRES_IN: 15m
+      JWT_REFRESH_EXPIRES_IN: 7d
+      PAYMENT_DEADLINE_MINUTES: 30
+      OTP_EXPIRY_MINUTES: 30
+      THROTTLE_TTL: 60
+      THROTTLE_LIMIT: 100
+      PRESENCE_OFFLINE_MINUTES: 6
+      PRESENCE_SWEEP_SECONDS: 60
+      TRACKING_DISPLACEMENT_METERS: 50
+      TRACKING_HEARTBEAT_MINUTES: 3
+      ORDER_AVERAGE_SPEED_KMH: 60
+      ORDER_QUOTE_EXPIRY_MINUTES: 10
+      PASSWORD_RESET_EXPIRY_MINUTES: 5
+      PASSWORD_RESET_MAX_ATTEMPTS: 5
+      PASSWORD_RESET_MAX_REQUESTS: 3
+      PASSWORD_RESET_WINDOW_MINUTES: 15
+      PLATFORM_DAY_BOUNDARY_TIMEZONE: Asia/Riyadh
+      WAREHOUSE_GEOFENCE_RADIUS_METERS: 500
+      ASSIGNMENT_ACK_WINDOW_MINUTES: 3
+      ASSIGNMENT_ESCALATION_SMS_RATE_LIMIT_MAX: 20
+      ASSIGNMENT_ESCALATION_SMS_RATE_LIMIT_DURATION_MS: 60000
+      STOP_DETECTION_WINDOW_MINUTES: 10
+      STOP_DETECTION_MOVEMENT_METERS: 50
+      STOP_RESPONSE_WINDOW_MINUTES: 5
+      STOP_DETECTION_SWEEP_SECONDS: 60
+      MONGO_MAX_POOL_SIZE: 20
+      MONGO_MIN_POOL_SIZE: 2
+      MONGO_SERVER_SELECTION_TIMEOUT_MS: 5000
+      MONGO_CONNECT_TIMEOUT_MS: 10000
+      MONGO_SOCKET_TIMEOUT_MS: 45000
+      MONGO_WAIT_QUEUE_TIMEOUT_MS: 10000
+      SCHEDULER_LEASE_TTL_MS: 55000
+      SCHEDULER_LEASE_ENABLED: "true"
+      READINESS_POLL_INTERVAL_SECONDS: 10
+      READINESS_FAILURE_THRESHOLD: 3
+      READINESS_RECOVERY_THRESHOLD: 3
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/v1/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 45s
+    logging: *logging

@@ -1,0 +1,21 @@
+# Caddy obtains and renews the TLS certificate automatically.
+# api.ciro.app must already resolve to this VM before first start,
+# or the ACME challenge fails and Caddy retries with backoff.
+api.ciro.app {
+	encode gzip
+
+	# /health/ready reports dependency state — database reachability, Redis
+	# degradation, which capabilities are impaired. That is a map of the
+	# platform's weak points, so it stays internal: the container healthcheck
+	# and any on-VM monitor reach it directly on the compose network.
+	@ready path /api/v1/health/ready*
+	respond @ready 404
+
+	# /health/live is deliberately public: status, an opaque instance label and
+	# uptime, nothing more. This is what an external uptime check polls, and
+	# without it nothing outside the VM can tell whether the platform is up.
+	reverse_proxy app:3000 {
+		header_up Host {host}
+		header_up X-Real-IP {remote_host}
+	}
+}

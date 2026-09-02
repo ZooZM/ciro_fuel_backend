@@ -1,0 +1,122 @@
+# Build → push → deploy → verify.
+#
+# No service-account key exists anywhere. GitHub authenticates to Google via
+# Workload Identity Federation: the runner presents its OIDC token, Google
+# trusts it because the pool is bound to THIS repository, and issues a
+# short-lived credential. Nothing to rotate and nothing to leak.
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  # Lets you re-run a deploy without pushing — useful when a deploy failed for
+  # an environmental reason rather than a code one.
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: ciro-fuel-prod
+  REGION: me-central1
+  ZONE: me-central1-a
+  INSTANCE: ciro-fuel-prod-vm
+  REPO: ciro-images
+  IMAGE: ciro-fuel-api
+
+# One deploy at a time. Without this, two quick merges race and the slower
+# build can overwrite the newer one on the server.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write        # required for Workload Identity Federation
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: meta
+        # The commit SHA is the tag. Never `latest` for a deploy: you must be
+        # able to say exactly which commit is running, and roll back to a
+        # specific one rather than to "whatever latest pointed at yesterday".
+        run: echo "tag=${GITHUB_SHA::12}" >> "$GITHUB_OUTPUT"
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_CI_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          # The runner is amd64 and so is the VM, but this is stated
+          # explicitly so a future self-hosted arm64 runner cannot silently
+          # produce an image that deploys fine and dies with `exec format error`.
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE }}:${{ steps.meta.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    # To require a manual approval before production, add:
+    #   environment: production
+    # and configure a required reviewer on that environment in repo settings.
+    # That is the whole change — nothing else here moves.
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WIF_PROVIDER }}
+          service_account: ${{ secrets.GCP_CI_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy and verify
+        run: |
+          set -euo pipefail
+          TAG="${{ needs.build.outputs.tag }}"
+          IMG="${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO }}/${{ env.IMAGE }}:${TAG}"
+
+          gcloud compute ssh ${{ env.INSTANCE }} \
+            --zone=${{ env.ZONE }} --tunnel-through-iap --quiet \
+            --command="set -euo pipefail
+              cd ~/ciro
+              # Record what is running now, so a failed deploy can be rolled back.
+              grep -oP 'ciro-fuel-api:\K\S+' docker-compose.prod.yml > .previous-tag
+              sed -i 's|${{ env.IMAGE }}:[^ ]*|${{ env.IMAGE }}:${TAG}|' docker-compose.prod.yml
+              docker compose -f docker-compose.prod.yml pull app
+              docker compose -f docker-compose.prod.yml up -d app
+
+              # A deploy is not finished when the container starts — it is
+              # finished when the app reports itself ready. Without this the
+              # pipeline goes green while a crash-looping container serves 502s.
+              for i in \$(seq 1 30); do
+                if docker compose -f docker-compose.prod.yml exec -T app \
+                     node -e \"fetch('http://127.0.0.1:3000/api/v1/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\" 2>/dev/null; then
+                  echo 'ready'; exit 0
+                fi
+                sleep 5
+              done
+              echo 'NOT READY after 150s — rolling back'
+              sed -i \"s|${{ env.IMAGE }}:${TAG}|${{ env.IMAGE }}:\$(cat .previous-tag)|\" docker-compose.prod.yml
+              docker compose -f docker-compose.prod.yml up -d app
+              exit 1"
+
+      - name: Report
+        if: success()
+        run: echo "Deployed ${{ needs.build.outputs.tag }} — https://api.ciro.app/api/v1/health/live"
