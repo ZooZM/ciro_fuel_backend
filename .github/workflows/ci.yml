@@ -10,6 +10,7 @@ jobs:
   guard-entrypoint:
     name: Guard entry-point constraint
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - name: Fail if root index.ts/index.js exists
@@ -23,6 +24,7 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: guard-entrypoint
     steps:
       - uses: actions/checkout@v4
@@ -36,6 +38,7 @@ jobs:
   test:
     name: Unit tests
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: guard-entrypoint
     steps:
       - uses: actions/checkout@v4
@@ -44,11 +47,12 @@ jobs:
           node-version: "20"
           cache: "npm"
       - run: npm ci
-      - run: npm test
+      - run: npm test -- --forceExit --detectOpenHandles
 
   e2e:
     name: E2E tests
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     needs: guard-entrypoint
     services:
       redis:
@@ -69,11 +73,12 @@ jobs:
           node-version: "20"
           cache: "npm"
       - run: npm ci
-      - run: npm run test:e2e
+      - run: npm run test:e2e -- --forceExit --detectOpenHandles
 
   build:
     name: Build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     needs: [lint, test, e2e]
     steps:
       - uses: actions/checkout@v4
@@ -87,6 +92,7 @@ jobs:
   docker:
     name: Docker build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: build
     steps:
       - uses: actions/checkout@v4

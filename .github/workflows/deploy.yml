@@ -30,6 +30,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     permissions:
       contents: read
       id-token: write        # required for Workload Identity Federation
@@ -71,6 +72,7 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     # To require a manual approval before production, add:
     #   environment: production
     # and configure a required reviewer on that environment in repo settings.
