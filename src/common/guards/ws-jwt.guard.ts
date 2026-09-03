@@ -49,5 +49,12 @@ export async function authenticateSocket(
     role: user.role,
     companyId: user.companyId?.toString(),
     parentFuelCompanyId,
+    // feature 013 US2 (research R2/R3): carried from the HANDSHAKE token, not
+    // re-read from `user` — the per-frame check in `TrackingGateway`
+    // compares *what this connection claimed when it opened* against *what
+    // the account holds now*. Sourcing both from the account compares it to
+    // itself, always agrees, and yields a silently inert guard. Absent
+    // normalises to 0 on the comparison side.
+    sgen: payload.sgen,
   };
 }

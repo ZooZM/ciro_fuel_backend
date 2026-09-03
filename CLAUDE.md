@@ -1,5 +1,129 @@
 <!-- SPECKIT START -->
-Active feature — read this plan first: `specs/012-production-hardening/plan.md`
+Active feature — read this plan first: `specs/013-driver-app-backend-completion/plan.md`
+(close the driver app's remaining fabricated surfaces against the real platform, and make an in-flight
+delivery belong to the driver rather than to the handset in their pocket). **Implemented — 93 of 96
+tasks complete**; the 3 that remain (T009, T088, T089) are the manual quickstart walkthroughs, which
+need a running backend and — for T089 — two physical devices. Supporting
+artifacts: `spec.md` (5 stories, 50 FRs, 14 SCs, 3 clarifications resolved),
+`research.md` (12 decisions — R1, R2, R7 and R10 each overturn an assumption), `data-model.md`,
+`quickstart.md`, `contracts/rest-api-delta.md`, `contracts/realtime-contract.md`,
+`contracts/mobile-integration.md`, `contracts/dashboard-integration.md`.
+
+**Implementation status.** All 5 user stories built and verified across three roots.
+Backend: `npm run lint:check` clean, `npm run build` clean, `npm run test` **187/187 across 22 suites**,
+`npm run test:e2e` **67/68 suites, 361/366 tests** — the only red is the pre-existing `request-logging.e2e-spec.ts`
+(spec 012 US5 structured logging), which fails identically on an unmodified tree in this environment
+(it parses 0 captured log records) and is untouched by this feature. New e2e suites:
+`session-displacement`, `session-displacement-rest`, `delivery-continuity`, `driver-stop-visibility`,
+`driver-blocked-report`, `notifications-read-all`, plus a `multi-instance` case (T030). Mobile:
+`flutter test` **444 passing**, same two documented non-green (`login_screen_golden_test` pixel diff,
+`auth_session_test` `skip:true`). Dashboard: `tsc -b --force` unchanged (57 pre-existing
+`TS6133`/`TS6192`/one `TS2307`), `vitest run` **50 passing** (+1 for the new `StopAlertCard` BLOCKED
+case), same two pre-existing load failures.
+
+**Analysis pass 2026-09-03 — one real bug, found from a user report, plus four gaps closed.** The
+report was "pressing Face ID on the login page crashes the app," and it turned out to gate this
+feature's headline claim: US1 *is* signing in on a replacement device, SC-002 counts "sign-in and
+device unlock" inside its 2-minute budget, and **T089 cannot be walked at all while the login screen
+crashes**. Two independent causes in opposite directions, neither visible to any suite:
+`NSFaceIDUsageDescription` was absent from `mobile_app/ios/Runner/Info.plist` — iOS *terminates the
+process* on the first Face ID evaluation without it, a native abort that
+`BiometricAuthenticator`'s `catch (PlatformException)` never sees — and Android's `MainActivity`
+extended `FlutterActivity` rather than `FlutterFragmentActivity`, so `local_auth` failed every
+`authenticate()` with `no_fragment_activity`, which *is* caught, leaving the mandatory app lock and
+biometric sign-in **silently inert on Android since spec 006**. Both fixed and guarded by
+`mobile_app/test/unit/biometric_platform_config_test.dart` (+`USE_BIOMETRIC` declared explicitly);
+mobile is now **447 passing**, same two documented non-green. Also closed: **FR-012 had zero coverage**
+outside the deferred manual walkthrough (T014d — the client's `GET /orders/:id` must keep returning
+`driverLocationAt` across the device gap, or spec 011's staleness treatment has no input and a frozen
+dot renders exactly like a live one) and FR-013 was asserted only for its three stage-defining fields
+(T014c — quantity and fuel grade are the two a driver acts on at the depot). Documentation drift
+corrected: the FR count is **50**, not 49; a duplicated US3 acceptance-scenario number; and plan.md's
+source map still pointed T021 at `delivery_detail_screen.dart`. **Left disclosed, not fixed**: the
+Android `LaunchTheme`/`NormalTheme` descend from `@android:style/Theme.*` rather than AppCompat, which
+`androidx.biometric`'s pre-API-28 fallback dialog wants — `minSdk` is 26, so API 26–27 can still reach
+that path; retheming the app's window is a far wider blast radius than this fix.
+
+**New platform surface**: `POST /orders/:id/stops/blocked` (DRIVER), `PATCH /notifications/read-all`
+(any) · `StopOrigin.BLOCKED` · `NotificationType.ORDER_DRIVER_BLOCKED` · `AuthenticatedUser.sgen`
+stamped at socket handshake · `RealtimeGatewayService.disconnectUser` · per-frame `sgen` check in
+`TrackingGateway.locationUpdate` (with `presenceService.touch` reordered after the driver load).
+
+**Corrections found while implementing** (full log in `specs/013-.../tasks.md`):
+· **The driver notification read/write path was tenant-scoped out — not just the push.** `Notification`
+is `markTenantScoped`; every `notify` call site addresses a driver notification with the *order's*
+`fuelCompanyId`, a different tenant from the driver's own (transport) `companyId`, so the ambient
+`.where({companyId})` on `find`/`countDocuments`/`updateMany`/`findOneAndUpdate` matched **none** of a
+driver's own notifications — the list would render permanently empty and mark-read would 404.
+`findForUser`, `markRead` and the new `markAllRead` now `runUnscoped`, keyed on `recipientUserId` (from
+the token — the real per-user boundary), exactly as `notify`'s write already does. Equivalent-or-tighter
+for a CLIENT, so no client-persona change.
+· **`TrackingSocket.dispose()` keeps the handler registry** (the artifacts said "clear both").
+`NotificationsCubit` registers its `notification:new` handler once, in its constructor, and is never
+recreated — clearing the registry on `dispose()` would make it permanently deaf after the first
+sign-out/sign-in. Consequence: `SessionRevocationListener`/`DeliveryListener` attach once (an
+`injector.dart` guard), since the durable registry re-flushes them on every `connect()`.
+· **T021's untracked indicator renders on `driver_home_screen.dart`, not `delivery_detail_screen.dart`**
+— `DeliveryActive.streaming` lives on `DeliveryCubit`, which the detail screen (driven by
+`OrderDetailCubit`) does not have in every test tree. The outstanding-stop banner (T020) does land on
+the detail screen as specified.
+· **Blocked-report not-in-transit refusal reuses the declare path's `409 STOP_NOT_IN_TRANSIT`** rather
+than the contract-delta's suggested 422 — one refusal taxonomy shared with `declareStop` via
+`explainDeclineRefusal`, which is the "reuse the stop machinery" decision's whole point.
+
+**The keystone finding, which inverts the obvious implementation order (research R1)**: every `on*` on
+`mobile_app/lib/core/realtime/tracking_socket.dart` is `_socket?.on(...)`, so a handler registered
+before `connect()` resolves **succeeds silently and subscribes to nothing**. This is mobile `CLAUDE.md`
+debt #6, and it is why `NotificationsCubit` has never received a single push — **for either persona**.
+Specs 006 and 007 each worked around it by hand (`SessionRevocationListener`, `DeliveryListener` — both
+external classes existing solely so `attach()` runs after `await connect()`). So **Slice 0 fixes the
+socket itself, alone, before any other work**: Story 3's notification screen is built differently before
+and after it, the failure mode is invisible to any test that does not specifically drive a push, and it
+touches the client persona, which this feature is otherwise scoped away from.
+
+**Other findings that change the design rather than the documentation**:
+· **Server-side session enforcement is free, which removes the only real objection to it.**
+`WsJwtGuard` verifies nothing — its own docstring says it "just confirms the middleware already
+populated `socket.data.user`"; `sgen` is checked **once, at handshake, never again**. So a displaced
+device keeps writing the authoritative position of a truck, feeding stop detection's `lastMovedAt`,
+`$geoNear` dispatch proximity and the customer's map. A per-frame check sounds expensive — but
+`locationUpdate` **already** runs `userModel.findById` on every frame, unconditionally, and that
+document carries `sessionGeneration`. The comparison is **zero additional I/O**; a Redis-cached
+generation would be slower *and* would add a degradation path spec 012's Q7 must then answer for. Forces
+one reordering: `presenceService.touch()` currently runs *before* the driver load, so a displaced device
+would keep a dead handset marked `isOnline`.
+· **The blocked-driver report cannot be filed as a declaration.** `declareStop` writes `resolvedAt: now`
+plus `suppressedUntil`, and notifies nobody — the transporter is reached *only* by escalating an
+unanswered DETECTED stop. So the obvious reuse would tell no one, mark itself handled, **and switch off
+detection**: a driver who presses "I cannot reach" would become *less* visible than one who says nothing.
+It is a third `StopOrigin`, written **unresolved**, with **no** `suppressedUntil`, `escalatedAt` stamped
+at creation and the transporter notified in the same operation.
+· **The driver's notification tabs describe a platform that does not exist.** Auditing every `notify`
+call site, a DRIVER is the recipient of exactly **two** types — `ORDER_ASSIGNED` and
+`DRIVER_STOP_DETECTED` — both order-related. So "System" can never match and "Orders" equals "All". The
+three tabs are **removed**, on feature 009's `MapTrackingCard`-legend precedent.
+· **`FR-042a` was too absolute and is amended.** `web_dashboard/src/constants/stop-events.ts` mirrors
+`StopOrigin` as a fixed const map whose own comment records that an unknown value "does not fail loudly —
+it renders as a missing translation key next to a real stop on a real delivery." A third origin therefore
+*requires* a dashboard change; it is part of FR-039a, not an optional extra.
+· **Two requirements are already satisfied and need a test, not an implementation.** FR-015 —
+`validateActiveSessionWithScoping` already compares `sgen` on every authenticated request and throws the
+structured `SESSION_REVOKED` shape. FR-021 — `AuthService.login` already writes `REVOKED`
+(`SIGNED_IN_ELSEWHERE`) + `SIGNED_IN` in one transaction. Writing a second device-switch audit would
+duplicate a trail that exists, and two records of one event that can disagree is worse than one.
+· **`DeliveryActive.streaming` has been computed and discarded since spec 007** — a grep across `lib/`
+finds only its own declaration. A driver who refuses location permission sees a completely normal
+delivery screen while the platform receives nothing.
+· **`Order.stopEvents` needs an empty default, for the *client*.** `toRoleScopedShape` strips the key
+entirely for a CLIENT, and both personas share one entity and one parsing path — a non-nullable field
+without a default breaks every client order.
+
+**The trap in the enforcement slice**: like spec 012's Redis adapter, it passes every single-device test
+whether or not it works. A displaced device reporting *the same position* proves nothing — the
+displacement threshold would reject that frame anyway. The test must report from a **different
+location** and assert both that the truck's position is unchanged and that `lastMovedAt` did not advance.
+
+Previously implemented feature: `specs/012-production-hardening/plan.md`
 (close the operational gaps that decide whether a production incident is a five-minute fix or a
 silent failure, **without changing one byte of platform behaviour** — a liveness signal, graceful
 shutdown, production CORS, proxy-aware rate limiting, structured logs, durable document storage,

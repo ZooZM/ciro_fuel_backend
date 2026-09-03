@@ -25,4 +25,12 @@ export enum NotificationType {
   // the response window (FR-009) — the driver was asked and said nothing,
   // which is the case most likely to mean they cannot answer.
   ORDER_STOP_UNRESOLVED = 'ORDER_STOP_UNRESOLVED',
+
+  // feature 013 US5a: to the TRANSPORT COMPANY's admins — the driver reported
+  // they cannot reach the destination and stated why. Deliberately NOT
+  // `ORDER_STOP_UNRESOLVED`, which means "asked and said nothing" (FR-039a
+  // requires the transporter to tell the two apart). Sent immediately, in
+  // the same operation that appends the BLOCKED stop; no response window
+  // elapses first.
+  ORDER_DRIVER_BLOCKED = 'ORDER_DRIVER_BLOCKED',
 }

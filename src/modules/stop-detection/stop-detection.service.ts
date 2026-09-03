@@ -295,6 +295,97 @@ export class StopDetectionService implements OnModuleInit {
   }
 
   /**
+   * feature 013 US5a (FR-039a/FR-039b, contracts/rest-api-delta.md §1): the
+   * driver reports they cannot reach the destination and is asking for help.
+   *
+   * **Not a declaration.** `declareStop` writes `resolvedAt: now` +
+   * `suppressedUntil`, and notifies nobody — so filing this as a declaration
+   * would tell no one *and* switch detection off (research R5). A blocked
+   * report is a third origin, written **unresolved**, with **no**
+   * `suppressedUntil`, `escalatedAt` stamped at creation, and the transporter
+   * notified in the same operation. No escalation job is enqueued — there is
+   * no silence to wait out.
+   *
+   * Same conditional-write discipline as `declareStop`/`raiseStopFor`:
+   * ownership, the IN_TRANSIT requirement and the one-open-stop invariant are
+   * all evaluated by the database in the write itself, so a report racing the
+   * detection sweep cannot leave two open stops (Constitution V).
+   */
+  async reportBlocked(
+    orderId: string,
+    driverId: string,
+    input: { reason: StopReason; reasonText?: string },
+  ): Promise<OrderDocument> {
+    const now = new Date();
+    const stopId = new Types.ObjectId();
+
+    const driver = await this.userModel.findById(driverId).select('location').lean().exec();
+
+    const result = await this.orderModel
+      .updateOne(
+        {
+          _id: new Types.ObjectId(orderId),
+          driverId: new Types.ObjectId(driverId),
+          status: OrderStatus.IN_TRANSIT,
+          stopEvents: { $not: { $elemMatch: unblockedStopFilter(now) } },
+        },
+        {
+          $push: {
+            stopEvents: {
+              _id: stopId,
+              origin: StopOrigin.BLOCKED,
+              detectedAt: now,
+              ...(driver?.location ? { location: driver.location } : {}),
+              reason: input.reason,
+              ...(input.reasonText ? { reasonText: input.reasonText } : {}),
+              reasonGivenAt: now,
+              // No `suppressedUntil` — FR-039b. `escalatedAt` at creation —
+              // the transporter is told now, and the record must say so.
+              escalatedAt: now,
+              resolvedAt: null,
+            },
+          },
+        },
+      )
+      .exec();
+
+    if (result.modifiedCount === 0) {
+      // Reuses the declare path's refusal taxonomy verbatim — not this
+      // driver's order (404, never 403), not IN_TRANSIT (409), or a stop is
+      // already open (409 STOP_ALREADY_OPEN).
+      await this.explainDeclineRefusal(orderId, driverId, now);
+    }
+
+    const order = await this.requireOrder(orderId);
+
+    // Notify the transporter that owns the delivery — the identical lookup
+    // `StopEscalationProcessor` uses. Enqueue no escalation job.
+    const admins = await this.userModel
+      .find({
+        companyId: order.transportCompanyId,
+        role: UserRole.TRANSPORT_COMPANY_ADMIN,
+        isActive: true,
+      })
+      .select('_id')
+      .lean()
+      .exec();
+
+    await Promise.all(
+      admins.map((admin) =>
+        this.notificationsService.notify({
+          companyId: order.fuelCompanyId,
+          recipientUserId: String(admin._id),
+          type: NotificationType.ORDER_DRIVER_BLOCKED,
+          orderId: order._id as never,
+          payload: { stopId: String(stopId), reason: input.reason },
+        }),
+      ),
+    );
+
+    return order;
+  }
+
+  /**
    * spec 011 FR-007/FR-010: the driver answers a detected stop.
    *
    * **A late answer is a success.** If the response window already elapsed

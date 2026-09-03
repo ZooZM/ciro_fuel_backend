@@ -89,6 +89,13 @@ export class AuthService {
       cause: SessionRevocationCause.SIGNED_IN_ELSEWHERE,
       occurredAt: new Date().toISOString(),
     });
+    // feature 013 US2 (FR-017, realtime-contract §3): and end the displaced
+    // device's socket outright, so it stops retrying and holding a slot with
+    // every frame refused. Same ordering as the emit above — generation
+    // already committed. Degrades rather than throwing on a Redis-adapter
+    // failure (spec 012 Q7); the gateway's per-frame check is the guarantee
+    // that survives a lost disconnect.
+    this.realtimeGateway.disconnectUser(userId);
 
     const tokens = await this.issueTokenPair(user, generation);
     return { ...tokens, user: toSafeUser(user) };

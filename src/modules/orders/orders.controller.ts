@@ -48,6 +48,7 @@ import { QuoteOrderDto } from './dto/quote-order.dto';
 import { StopDetectionService } from '../stop-detection/stop-detection.service';
 import { DeclareStopDto } from './dto/declare-stop.dto';
 import { SubmitStopReasonDto } from './dto/submit-stop-reason.dto';
+import { ReportBlockedDto } from './dto/report-blocked.dto';
 
 @Controller({ path: 'orders', version: '1' })
 export class OrdersController {
@@ -598,6 +599,25 @@ export class OrdersController {
     @Body() dto: DeclareStopDto,
   ) {
     const order = await this.stopDetectionService.declareStop(id, user.userId, dto);
+    return this.toRoleScopedShape(order, user);
+  }
+
+  /**
+   * feature 013 US5a (contracts/rest-api-delta.md §1): the driver cannot
+   * reach the destination and is asking for help. Ownership, the IN_TRANSIT
+   * requirement and the one-open-stop invariant are enforced inside the
+   * service's conditional write — a report racing the detection sweep cannot
+   * leave two open stops. Returns the role-scoped order, like the sibling
+   * stop endpoints.
+   */
+  @Roles(UserRole.DRIVER)
+  @Post(':id/stops/blocked')
+  async reportBlocked(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ObjectIdPipe) id: string,
+    @Body() dto: ReportBlockedDto,
+  ) {
+    const order = await this.stopDetectionService.reportBlocked(id, user.userId, dto);
     return this.toRoleScopedShape(order, user);
   }
 

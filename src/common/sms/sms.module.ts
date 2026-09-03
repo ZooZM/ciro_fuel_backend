@@ -2,6 +2,7 @@ import { Global, Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { SMS_SENDER } from './sms-sender.port';
 import { NoopSmsSender } from './noop-sms-sender';
+import { TaqnyatSmsSender } from './taqnyat-sms-sender';
 
 /**
  * Global so `PhoneVerificationService` (spec 005 US7) can inject
@@ -23,18 +24,21 @@ import { NoopSmsSender } from './noop-sms-sender';
   imports: [ConfigModule],
   providers: [
     NoopSmsSender,
+    TaqnyatSmsSender,
     {
       provide: SMS_SENDER,
-      inject: [ConfigService, NoopSmsSender],
-      useFactory: (config: ConfigService, noop: NoopSmsSender) => {
+      inject: [ConfigService, NoopSmsSender, TaqnyatSmsSender],
+      useFactory: (config: ConfigService, noop: NoopSmsSender, taqnyat: TaqnyatSmsSender) => {
         const provider = config.get<string>('sms.provider');
         switch (provider) {
           case 'none':
             return noop;
+          case 'taqnyat':
+            return taqnyat;
           default:
             throw new Error(
-              `SMS_PROVIDER=${provider} has no sender implementation yet — only 'none' ` +
-                '(the development no-op) is wired. See src/common/sms/sms.module.ts.',
+              `SMS_PROVIDER=${provider} has no sender implementation — wired providers are ` +
+                "'taqnyat' and 'none' (the development no-op). See src/common/sms/sms.module.ts.",
             );
         }
       },

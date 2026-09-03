@@ -237,6 +237,15 @@ by their fuel company.
 | POST | `/orders/:id/verify-delivery` (5/15min) | DRIVER (assigned) | `{ otp }` → on match (txn): `DELIVERED`, driver released (FR-022) |
 | PATCH | `/orders/:id/force-complete` | FUEL_COMPANY_ADMIN | `{ reason }` (required, 5–500 chars); order must be `IN_TRANSIT` or `UNLOADING` → (txn) `DELIVERED`, driver released, active OTPs invalidated, statusHistory entry stamped `{manualOverride: true, overrideReason}` (FR-025). 409 from any other state; DRIVER/CLIENT ⇒ 403 |
 
+**Stop events (spec 011 · in-transit stop detection; spec 013 · blocked report).** A stop is an embedded entry on `Order.stopEvents`, returned to the DRIVER and the TRANSPORT_COMPANY_ADMIN, stripped from the CLIENT's shape (`toRoleScopedShape`). `origin` ∈ `DETECTED` (the sweep asked) · `DECLARED` (the driver announced it early — written already resolved + `suppressedUntil`) · `BLOCKED` (spec 013 — the driver cannot reach the destination; written **unresolved**, **no** `suppressedUntil`, `escalatedAt` at creation, transporter notified in the same op).
+
+| Method | Path | Roles | Notes |
+|--------|------|-------|-------|
+| POST | `/orders/:id/stops/declare` | DRIVER (assigned) | `{ reason, reasonText?, expectedDurationMinutes }` (1–240). Order must be `IN_TRANSIT`; 409 `STOP_ALREADY_OPEN` if one is unresolved; 404 not-yours |
+| POST | `/orders/:id/stops/:stopId/reason` | DRIVER (assigned) | `{ reason, reasonText? }` — answers a `DETECTED` stop; a late answer (past the escalation window) is an ordinary success |
+| POST | `/orders/:id/stops/blocked` | DRIVER (assigned) | **spec 013.** `{ reason, reasonText? }` (`reasonText` required only for `OTHER`). Appends a `BLOCKED` stop and notifies the transport company's admins (`ORDER_DRIVER_BLOCKED`) immediately — no response window, no escalation job. Order must be `IN_TRANSIT`; 409 `STOP_ALREADY_OPEN`; 404 not-yours (never 403). Detection is **not** suppressed. Closed by the existing resolve endpoint |
+| PATCH | `/orders/:id/stops/:stopId/resolve` | TRANSPORT_COMPANY_ADMIN | marks any stop handled, `resolvedBy` stamped; 409 `STOP_ALREADY_RESOLVED` |
+
 Invalid state transition on any route ⇒ `409 { message: "Invalid transition <from> → <to>" }`.
 
 **Order status machine (spec 004 US5 extends US4's routing states with billing):**
@@ -431,6 +440,7 @@ restart storm on top of it. Full contract: `specs/012-production-hardening/contr
 |--------|------|-------|-------|
 | GET | `/notifications?unread=&cursor=` | any | own notifications only. Paginated (see Cursor pagination above); response gains `unreadCount` — the count across the caller's **whole** set, not the current page, since it backs a badge |
 | PATCH | `/notifications/:id/read` | any | own only |
+| PATCH | `/notifications/read-all` | any | **spec 013.** Marks every unread notification read for the caller (from the token, never a body/query param). One `updateMany`, idempotent → `{ "updated": <count> }`; a second call returns `{ "updated": 0 }` |
 
 ```json
 { "items": [ /* ... */ ], "nextCursor": null, "unreadCount": 3 }
