@@ -153,6 +153,8 @@ function writePostmanEnvironment(actors: {
   transportAdminEmail: string;
   clientPhone: string;
   driverPhone: string;
+  fuelAdminBEmail: string;
+  referenceOrderId: string;
 }): void {
   const secret = (value: string) => ({ value, type: 'secret', enabled: true });
   const plain = (value: string) => ({ value, type: 'default', enabled: true });
@@ -169,6 +171,9 @@ function writePostmanEnvironment(actors: {
     clientPassword: secret(PASSWORD),
     driverPhone: plain(actors.driverPhone),
     driverPassword: secret(PASSWORD),
+    fuelAdminBEmail: plain(actors.fuelAdminBEmail),
+    fuelAdminBPassword: secret(PASSWORD),
+    referenceOrderId: plain(actors.referenceOrderId),
     paymentSadadSecret: secret(envFileValue('PAYMENT_SADAD_SECRET')),
     paymentMadaSecret: secret(envFileValue('PAYMENT_MADA_SECRET')),
   }).map(([key, rest]) => ({ key, ...rest }));
@@ -512,11 +517,109 @@ async function main(): Promise<void> {
   }
   console.log(`✔ ${ORDER_COUNT} orders seeded for the client (DEFERRED — ready to approve+route)\n`);
 
+  // 8. Feature 013 T004/T005: a station owner holding a CREDIT LIMIT, at
+  // least one APPROVED order for them, and the exact reference case
+  // quickstart.md Part 2 uses (31,501.100 L supplied against 33,000 L
+  // ordered) — so Phase 14's supplier-invoice/litre-balance walkthrough has
+  // real data without hand-building it each run.
+  await call(`/users/${client._id}/credit-limit`, {
+    method: 'PUT',
+    token: fuelAdmin.accessToken,
+    body: { creditLimit: 500000 },
+  });
+  console.log('✔ credit limit set on the seeded client (500,000)');
+
+  const referenceOrder = await (async () => {
+    const quote = await call<{ quoteToken: string }>('/orders/quote', {
+      method: 'POST',
+      token: clientAuth.accessToken,
+      body: { fuelType: 'DIESEL', quantityLiters: 33000, stationId: seedStationId },
+    });
+    return call<{ _id: string }>('/orders', {
+      method: 'POST',
+      token: clientAuth.accessToken,
+      body: {
+        fuelType: 'DIESEL',
+        quantityLiters: 33000,
+        stationId: seedStationId,
+        quoteToken: quote.quoteToken,
+        paymentMethod: 'DEFERRED',
+      },
+    });
+  })();
+  await call(`/orders/${referenceOrder._id}/approve`, {
+    method: 'PATCH',
+    token: fuelAdmin.accessToken,
+    body: {},
+  });
+  console.log(`✔ reference-case order approved — ${referenceOrder._id} (33,000 L DIESEL, ready for a supplier invoice)`);
+
+  // GET /orders takes only `status`/`cursor` — no page-size param — so this
+  // reads the whole first PENDING_APPROVAL page and uses just the first row.
+  const firstBatchOrders = await call<{ items: { _id: string; status: string }[] }>(
+    `/orders?status=PENDING_APPROVAL`,
+    { method: 'GET', token: fuelAdmin.accessToken },
+  );
+  if (firstBatchOrders.items[0]) {
+    await call(`/orders/${firstBatchOrders.items[0]._id}/approve`, {
+      method: 'PATCH',
+      token: fuelAdmin.accessToken,
+      body: {},
+    });
+    console.log(`✔ one seeded batch order approved — ${firstBatchOrders.items[0]._id} (invoice now exists, US6/US9 testable)`);
+  }
+
+  // 9. Feature 013 T004: a SECOND fuel company with its own administrator —
+  // required by every isolation assertion this feature adds (SC-006) and by
+  // Part 3's fuel exchange walkthrough, which needs two companies each
+  // selling a grade the other can name in a request (FR-085).
+  const registerPdfB = readFileSync(join(__dirname, 'fixtures', 'sample-register.pdf'));
+  const formB = new FormData();
+  formB.append('name', `Dashboard Fuel Co B ${suffix}`);
+  formB.append('contactEmail', `contact@${tag('fuelb')}.test`);
+  formB.append('contactPhone', `+9665${suffix}9`);
+  formB.append('adminEmail', `fuelb@${tag('dash')}.test`);
+  formB.append('adminFullName', 'Dashboard Fuel Admin B');
+  formB.append('adminPhone', `+9665900${suffix.slice(-5)}`);
+  formB.append('adminPassword', PASSWORD);
+  formB.append(
+    'commercialRegister',
+    new Blob([new Uint8Array(registerPdfB)], { type: 'application/pdf' }),
+    'register.pdf',
+  );
+  const fuelB = await call<{ company: { _id: string }; admin: { email: string } }>('/companies', {
+    method: 'POST',
+    token: superAdmin.accessToken,
+    form: formB,
+  });
+  const fuelAdminB = await login({ email: fuelB.admin.email });
+  await call(`/companies/${fuelB.company._id}/fuel-prices`, {
+    method: 'PUT',
+    token: fuelAdminB.accessToken,
+    body: {
+      prices: [
+        { fuelType: 'DIESEL', basePricePerLiter: 2.05 },
+        { fuelType: 'PETROL_91', basePricePerLiter: 2.3 },
+        { fuelType: 'PETROL_95', basePricePerLiter: 2.5 },
+        { fuelType: 'KEROSENE', basePricePerLiter: 1.9 },
+      ],
+    },
+  });
+  console.log(`✔ second fuel company ${fuelB.company._id} seeded — for isolation tests and fuel exchange (Part 3)`);
+  actors.push({
+    role: 'FUEL_COMPANY_ADMIN (company B)',
+    login: fuelB.admin.email,
+    password: PASSWORD,
+    note: 'the counterparty for isolation and fuel-exchange walkthroughs — SC-006, quickstart Part 3',
+  });
+
   writePostmanEnvironment({
     fuelAdminEmail: fuel.admin.email,
     transportAdminEmail: transport.admin.email,
     clientPhone,
     driverPhone,
+    fuelAdminBEmail: fuelB.admin.email,
+    referenceOrderId: referenceOrder._id,
   });
 
   console.log('Paste these into the dashboard session panel:\n');

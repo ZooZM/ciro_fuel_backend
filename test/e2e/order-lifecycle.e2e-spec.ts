@@ -350,11 +350,19 @@ describe('Order lifecycle (US1) — happy path', () => {
       await userModel.updateOne({ _id: fixtures.companyA.driver.id }, { $set: { isOnline: true } });
     });
 
-    it('refuses a FUEL_COMPANY_ADMIN — this figure set has no meaning for that role in this feature', async () => {
-      await request(app.getHttpServer())
+    // spec 013 T109/T111: this was 403 before feature 013 gave FUEL_COMPANY_ADMIN its own
+    // summary shape (`FuelCompanySummaryDto`) — the original comment's "no meaning for
+    // that role in this feature" was true of `OrderSummaryDto`'s specific fields
+    // (`driversOnDuty`/`awaitingAssignment`), not of a summary endpoint for this role at
+    // all. See `fuel-company-summary.e2e-spec.ts` for the full coverage of that shape.
+    it('returns a differently-shaped summary for a FUEL_COMPANY_ADMIN, never the transport shape', async () => {
+      const res = await request(app.getHttpServer())
         .get('/api/v1/orders/summary')
         .set('Authorization', `Bearer ${fixtures.companyA.admin.token}`)
-        .expect(403);
+        .expect(200);
+      expect(res.body).not.toHaveProperty('driversOnDuty');
+      expect(res.body).not.toHaveProperty('awaitingAssignment');
+      expect(res.body).toHaveProperty('pendingApproval');
     });
 
     it('returns zero counts, not an error, for a company with no matching deliveries', async () => {

@@ -303,6 +303,81 @@ export class StopEvent {
 }
 export const StopEventSchema = SchemaFactory.createForClass(StopEvent);
 
+/** spec 013 T180/data-model.md — what the platform read from the document, before any
+ * administrator confirmation (FR-073a-i). Every field optional: extraction can yield
+ * nothing for any or all of them (R8 — `NullSupplierInvoiceExtractor` yields none). */
+@Schema({ _id: false })
+export class ExtractedSupplierInvoiceData {
+  @Prop()
+  quantityLitres?: number;
+
+  @Prop({ type: String, enum: FuelType })
+  fuelType?: FuelType;
+
+  @Prop()
+  reference?: string;
+
+  @Prop()
+  issueDate?: Date;
+}
+export const ExtractedSupplierInvoiceDataSchema = SchemaFactory.createForClass(ExtractedSupplierInvoiceData);
+
+/** spec 013 T180/FR-073a-ii — what the administrator confirmed. This is what counts: the
+ * shortfall/excess computation and every balance movement read `confirmed`, never
+ * `extracted` (data-model.md's own words). */
+@Schema({ _id: false })
+export class ConfirmedSupplierInvoiceData {
+  @Prop({ required: true, min: 0 })
+  quantityLitres!: number;
+
+  @Prop({ type: String, required: true, enum: FuelType })
+  fuelType!: FuelType;
+
+  @Prop({ required: true })
+  reference!: string;
+
+  @Prop({ required: true })
+  issueDate!: Date;
+}
+export const ConfirmedSupplierInvoiceDataSchema = SchemaFactory.createForClass(ConfirmedSupplierInvoiceData);
+
+/**
+ * spec 013 T180/FR-073/R7 — one supplier invoice reconciled against this order. **Keeps
+ * its `_id`**, with a comment saying so (the same call spec 011's `StopEvent` made): the
+ * confirm, replace and balance-movement paths each address one specific invoice.
+ * `confirmed` absent means nothing was ever recorded and no balance ever moved (SC-014c)
+ * — an abandoned upload (T185's upload-only step) leaves no sub-document at all, only a
+ * `FileRecord` nobody points at yet.
+ */
+@Schema()
+export class SupplierInvoice {
+  // Declared explicitly (Mongoose adds it at runtime regardless) so
+  // `SupplierInvoicesService.replace`'s `$set` on `supplierInvoices.$.supersededAt`
+  // (matched via this id) gets it on the TS type rather than reaching for a cast.
+  _id!: Types.ObjectId;
+
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'File', required: true })
+  fileId!: Types.ObjectId;
+
+  @Prop({ type: ExtractedSupplierInvoiceDataSchema })
+  extracted?: ExtractedSupplierInvoiceData;
+
+  @Prop({ type: ConfirmedSupplierInvoiceDataSchema })
+  confirmed?: ConfirmedSupplierInvoiceData;
+
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User' })
+  confirmedBy?: Types.ObjectId;
+
+  @Prop()
+  confirmedAt?: Date;
+
+  // T192/FR-073e: set when a `PUT` replaces this invoice — the record is kept, never
+  // deleted, following `Invoice.state: VOID`'s precedent of leaving a full trail.
+  @Prop()
+  supersededAt?: Date;
+}
+export const SupplierInvoiceSchema = SchemaFactory.createForClass(SupplierInvoice);
+
 @Schema({ timestamps: true })
 export class Order {
   // The owning Fuel Company — always set, immutable (spec 004 plan.md §1's
@@ -486,6 +561,17 @@ export class Order {
   // where that holds.
   @Prop({ type: [StopEventSchema], default: [] })
   stopEvents!: StopEvent[];
+
+  // spec 013 T180/FR-073e: an ARRAY, not the single embedded sub-document data-model.md's
+  // field name suggests — "replace... supersede... restate" (T192) and "retain both
+  // extracted and confirmed" (FR-073a-iv) both require the superseded invoice to survive,
+  // never be overwritten in place. The CURRENT one is whichever entry has no
+  // `supersededAt`; at most one such entry exists at a time, enforced by the service, not
+  // the schema (mirrors `Invoice.state: VOID` keeping every prior state's row rather than
+  // mutating it away). Same `_id`-keeping discipline as `stopEvents` above, for the same
+  // reason: the confirm, replace and balance-movement paths each address one specific one.
+  @Prop({ type: [SupplierInvoiceSchema], default: [] })
+  supplierInvoices!: SupplierInvoice[];
 }
 
 export const OrderSchema = SchemaFactory.createForClass(Order);

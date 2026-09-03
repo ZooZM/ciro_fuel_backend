@@ -7,6 +7,7 @@ import {
   HttpCode,
   Param,
   Patch,
+  Query,
 } from '@nestjs/common';
 import { StationsService } from './stations.service';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -35,6 +36,17 @@ export class StationsController {
   @Get()
   async findMine(@CurrentUser() user: AuthenticatedUser) {
     const items = await this.stationsService.findForClient(user.userId);
+    return { items };
+  }
+
+  // spec 013 FR-025, R5, T058: every station of the acting fuel company, across all its
+  // owners. No filter to write — `Station` is `markTenantScoped`, so the plugin already
+  // confines this query. The spec's Dependencies section called this a platform
+  // addition; it is this one route over an existing service call.
+  @Roles(UserRole.FUEL_COMPANY_ADMIN, UserRole.SUPER_ADMIN)
+  @Get('all')
+  async findAllForCompany(@Query('companyId') companyId?: string) {
+    const items = await this.stationsService.findAllForCompany(companyId || undefined);
     return { items };
   }
 

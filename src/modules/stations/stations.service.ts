@@ -27,6 +27,33 @@ export class StationsService {
   }
 
   /**
+   * spec 013 (fuel company admin dashboard) FR-025, R5 — every station belonging to the
+   * acting fuel company, across ALL its owners, not one owner at a time. Deliberately no
+   * explicit filter: `Station` is `markTenantScoped`, so the plugin already injects
+   * `{ companyId }` for the acting `FUEL_COMPANY_ADMIN` — writing one here would be a
+   * second, redundant filter this method does not need and the plan explicitly warns
+   * against re-deriving.
+   */
+  // spec 013 T238 (US13): `companyId` is safe to accept unconditionally — the
+  // tenant-scope plugin's own `.where({companyId})` overwrites this key for a
+  // FUEL_COMPANY_ADMIN caller regardless of what is passed, so it is only ever
+  // load-bearing for SUPER_ADMIN, who bypasses the plugin and otherwise sees every
+  // company's stations mixed together with no way to narrow to one.
+  findAllForCompany(companyId?: string): Promise<StationDocument[]> {
+    return this.stationModel
+      .find(companyId ? { companyId } : {})
+      .sort({ createdAt: -1 })
+      .exec();
+  }
+
+  // spec 013 T111/T113/FR-046 — the dashboard summary's station count. A `countDocuments`
+  // counterpart to `findAllForCompany` above rather than `.length` on the full list, same
+  // tenant-scoping note applies (no explicit filter needed).
+  countForCompany(): Promise<number> {
+    return this.stationModel.countDocuments({}).exec();
+  }
+
+  /**
    * A CLIENT may write `isFavourite` and nothing else (FR-036b) — enforced
    * by the DTO at the controller boundary, reasserted here by only ever
    * setting this one field regardless of what's passed in.

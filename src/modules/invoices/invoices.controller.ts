@@ -13,17 +13,19 @@ import { ObjectIdPipe } from '../../common/pipes/object-id.pipe';
 export class InvoicesController {
   constructor(private readonly invoicesService: InvoicesService) {}
 
-  @Roles(UserRole.FUEL_COMPANY_ADMIN, UserRole.TRANSPORT_COMPANY_ADMIN, UserRole.CLIENT)
+  @Roles(UserRole.FUEL_COMPANY_ADMIN, UserRole.TRANSPORT_COMPANY_ADMIN, UserRole.CLIENT, UserRole.SUPER_ADMIN)
   @Get()
   findMine(
     @Query('method') method?: PaymentMethod,
     @Query('state') state?: InvoiceState,
     @Query('cursor') cursor?: string,
+    @Query('fuelCompanyId') fuelCompanyId?: string,
   ) {
     return this.invoicesService.findForUser({
       method: method || undefined,
       state: state || undefined,
       cursor: cursor || undefined,
+      fuelCompanyId: fuelCompanyId || undefined,
     });
   }
 

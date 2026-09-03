@@ -7,6 +7,10 @@ export type FileRecordDocument = FileRecord & Document;
 export enum FilePurpose {
   COMMERCIAL_REGISTER = 'COMMERCIAL_REGISTER',
   PROFILE_PICTURE = 'PROFILE_PICTURE',
+  // spec 013 T165/FR-067 — evidence attached to a `PAYMENT_RECORDED` AccountMovement.
+  PAYMENT_EVIDENCE = 'PAYMENT_EVIDENCE',
+  // spec 013 T185/FR-073a — the document behind `Order.supplierInvoices`.
+  SUPPLIER_INVOICE = 'SUPPLIER_INVOICE',
 }
 
 @Schema({ timestamps: true })

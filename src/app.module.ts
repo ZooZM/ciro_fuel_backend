@@ -15,6 +15,7 @@ import { SmsModule } from './common/sms/sms.module';
 import { TenantContextService } from './common/context/tenant-context.service';
 import { createTenantScopePlugin } from './common/plugins/tenant-scope.plugin';
 import { createMultiPartyScopePlugin } from './common/plugins/multi-party-scope.plugin';
+import { createPartySetScopePlugin } from './common/plugins/party-set-scope.plugin';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 import { CompaniesModule } from './modules/companies/companies.module';
@@ -35,6 +36,9 @@ import { SupportModule } from './modules/support/support.module';
 import { SessionsModule } from './modules/sessions/sessions.module';
 import { DriversModule } from './modules/drivers/drivers.module';
 import { HealthModule } from './modules/health/health.module';
+import { BillingModule } from './modules/billing/billing.module';
+import { PlatformAccountModule } from './modules/platform-account/platform-account.module';
+import { FuelExchangeModule } from './modules/fuel-exchange/fuel-exchange.module';
 import { buildPinoOptions } from './common/logging/pino.config';
 
 @Module({
@@ -108,6 +112,11 @@ import { buildPinoOptions } from './common/logging/pino.config';
           // marked multiParty; every other schema is untouched by it
           // (plan.md §1, Constitution Check / Complexity Tracking).
           connection.plugin(createMultiPartyScopePlugin(tenantContext));
+          // Third, deliberately narrow mechanism for the one collection owned by an
+          // ARRAY of companies (spec 013 T214, research R3) — only activates for
+          // schemas marked `partySet`; `tenant-scope.plugin.ts` and
+          // `multi-party-scope.plugin.ts` above are untouched by its existence.
+          connection.plugin(createPartySetScopePlugin(tenantContext));
           return connection;
         },
       }),
@@ -159,6 +168,9 @@ import { buildPinoOptions } from './common/logging/pino.config';
     DispatchModule,
     PaymentsModule,
     InvoicesModule,
+    BillingModule,
+    PlatformAccountModule,
+    FuelExchangeModule,
     TrackingModule,
     StopDetectionModule,
     SupportModule,

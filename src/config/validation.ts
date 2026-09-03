@@ -178,4 +178,12 @@ export const validationSchema = Joi.object({
   // so a dead holder's lease expires before the next tick (FR-056b/FR-058).
   SCHEDULER_LEASE_TTL_MS: Joi.number().min(1000).default(55000),
   SCHEDULER_LEASE_ENABLED: Joi.boolean().default(true),
+
+  // spec 013 (fuel company admin dashboard) FR-062b — deliberately
+  // `.required()` with NO `.default()`. Unlike CORS_ALLOWED_ORIGINS/
+  // GCS_BUCKET (feature 012 findings: a silently-defaulted `''` shipped
+  // broken twice), this is a real financial policy value with no safe
+  // guess — an absent value must fail at boot, not surface as an
+  // unexplained ceiling the first time a company accrues commission.
+  PLATFORM_DEFAULT_COMMISSION_CEILING: Joi.number().positive().required(),
 });

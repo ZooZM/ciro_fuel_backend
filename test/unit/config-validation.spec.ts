@@ -12,6 +12,9 @@ describe('Configuration validation (spec 012)', () => {
     REDIS_URL: 'redis://127.0.0.1:6379',
     JWT_SECRET: '0123456789abcdef0123',
     JWT_REFRESH_SECRET: '0123456789abcdef0123',
+    // spec 013 FR-062b: required with no Joi default (a real financial policy value,
+    // never guessed) — every validate() call in this file needs one present.
+    PLATFORM_DEFAULT_COMMISSION_CEILING: '100000',
   };
 
   const validate = (env: Record<string, unknown>) => validationSchema.validate(env);

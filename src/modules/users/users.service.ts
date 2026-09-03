@@ -64,17 +64,23 @@ export class UsersService {
     user: UserDocument | null;
     usable: boolean;
     parentFuelCompanyId?: string;
+    // spec 013 FR-090/Edge Cases: distinguishes WHY `usable` is false, so a caller
+    // with a live session (validateActiveSessionWithScoping) can state the specific
+    // reason instead of falling back to whatever `lastRevocationCause` happens to
+    // hold — that field tracks ACCOUNT-level revocation and is never set when the
+    // company itself is suspended, so without this the two were indistinguishable.
+    unusableReason?: 'ACCOUNT_INACTIVE' | 'COMPANY_SUSPENDED';
   }> {
     const user = await this.userModel.findById(userId).exec();
     if (!user || !user.isActive) {
-      return { user: user ?? null, usable: false };
+      return { user: user ?? null, usable: false, unusableReason: 'ACCOUNT_INACTIVE' };
     }
     if (user.role === UserRole.SUPER_ADMIN || !user.companyId) {
       return { user, usable: true };
     }
     const scoping = await this.companiesService.getScopingInfo(user.companyId);
     if (!scoping || !scoping.isActive) {
-      return { user, usable: false };
+      return { user, usable: false, unusableReason: 'COMPANY_SUSPENDED' };
     }
     return { user, usable: true, parentFuelCompanyId: scoping.parentFuelCompanyId };
   }
@@ -129,12 +135,22 @@ export class UsersService {
   async validateActiveSessionWithScoping(
     payload: Pick<JwtPayload, 'sub' | 'sgen'>,
   ): Promise<{ user: UserDocument; parentFuelCompanyId?: string }> {
-    const { user, usable, parentFuelCompanyId } = await this._loadActiveUser(payload.sub);
+    const { user, usable, parentFuelCompanyId, unusableReason } = await this._loadActiveUser(
+      payload.sub,
+    );
     const sgenMismatch = !user || (payload.sgen ?? 0) !== (user.sessionGeneration ?? 0);
     if (!usable || sgenMismatch) {
+      // spec 013 FR-090/Edge Cases: a suspended company gives every one of its users a
+      // distinct cause here, not `lastRevocationCause` (which only ever tracks
+      // ACCOUNT-level revocation and is never set by company suspension — falling back
+      // to it would misreport the reason as stale/unrelated or leave it undefined).
+      const cause =
+        unusableReason === 'COMPANY_SUSPENDED'
+          ? SessionRevocationCause.COMPANY_SUSPENDED
+          : user?.lastRevocationCause;
       throw new UnauthorizedException({
         error: ErrorCode.SESSION_REVOKED,
-        cause: user?.lastRevocationCause,
+        cause,
         message: 'Your session has ended',
       });
     }
@@ -282,13 +298,24 @@ export class UsersService {
   // Absent filters must be omitted, not passed as `undefined`: Mongoose matches
   // an undefined value literally, so `{ role: undefined }` returns nothing and an
   // unfiltered list would come back empty.
-  findAll(filter: { role?: UserRole; isActive?: boolean }): Promise<UserDocument[]> {
+  //
+  // spec 013 T238 (US13) — `companyId` is meaningful only for `SUPER_ADMIN`: the
+  // tenant-scope plugin already narrows a FUEL_COMPANY_ADMIN/TRANSPORT_COMPANY_ADMIN
+  // caller to their own tenant automatically, and passing this filter for either role
+  // would be redundant with (never wider than) what the plugin already enforces. For
+  // `SUPER_ADMIN`, who bypasses the plugin entirely, this is the ONLY thing that can
+  // narrow the result to one company's users at all — omitting it for that role would
+  // return every user on the platform.
+  findAll(filter: { role?: UserRole; isActive?: boolean; companyId?: string }): Promise<UserDocument[]> {
     const query: FilterQuery<UserDocument> = {};
     if (filter.role !== undefined) {
       query.role = filter.role;
     }
     if (filter.isActive !== undefined) {
       query.isActive = filter.isActive;
+    }
+    if (filter.companyId !== undefined) {
+      query.companyId = filter.companyId;
     }
     return this.userModel.find(query).exec();
   }
@@ -307,8 +334,17 @@ export class UsersService {
    * caller (users.controller.ts) is responsible for confirming the target
    * is actually a CLIENT; tenant scoping (the target must belong to the
    * acting admin's own company) is automatic, same as every other write here. */
-  async setCreditLimit(id: string, creditLimit: number): Promise<UserDocument> {
-    const user = await this.userModel.findByIdAndUpdate(id, { creditLimit }, { new: true }).exec();
+  // spec 013 T065: `session` lets `CreditLimitRequestsService.resolve` write this in the
+  // same transaction as the request's own resolution (Principle V) — a crash between the
+  // two must never leave an ACCEPTED request whose grant was never actually applied.
+  async setCreditLimit(
+    id: string,
+    creditLimit: number,
+    session?: ClientSession,
+  ): Promise<UserDocument> {
+    const user = await this.userModel
+      .findByIdAndUpdate(id, { creditLimit }, { new: true, session })
+      .exec();
     if (!user) {
       throw new NotFoundException('User not found');
     }

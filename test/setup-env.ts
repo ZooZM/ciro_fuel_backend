@@ -47,3 +47,12 @@ process.env.LOG_LEVEL ||= 'silent';
 // `multi-instance.e2e-spec.ts` turns it back ON for itself, because contention
 // IS its subject.
 process.env.SCHEDULER_LEASE_ENABLED ||= 'false';
+
+// spec 013: PLATFORM_DEFAULT_COMMISSION_CEILING is `.required()` with no
+// Joi default (config/validation.ts) — a real financial policy value must
+// not be guessed. Every e2e suite needs a placeholder present before
+// app.module.ts is imported, for the same eager-validation reason as
+// everything above; the actual figure is arbitrary for tests, since
+// individual commission/ceiling suites set their own per-company ceiling
+// explicitly and only fall back to this when they deliberately don't.
+process.env.PLATFORM_DEFAULT_COMMISSION_CEILING ||= '100000';

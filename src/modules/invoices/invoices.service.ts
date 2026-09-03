@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
-import { ClientSession, Model, Types } from 'mongoose';
+import { InjectConnection, InjectModel } from '@nestjs/mongoose';
+import { ClientSession, Connection, Model, Types } from 'mongoose';
 import { Invoice, InvoiceDocument } from './schemas/invoice.schema';
 import { Order, OrderDocument } from '../orders/schemas/order.schema';
 import { User, UserDocument } from '../users/schemas/user.schema';
@@ -11,6 +11,7 @@ import { paginate, PaginatedResponse } from '../../common/pagination/paginate.ut
 import { CursorSortField } from '../../common/pagination/cursor.util';
 import { DEFAULT_CURRENCY, roundCurrency } from '../../common/constants/money.constants';
 import type { OutstandingSettlementsSummary } from '../orders/dto/order-summary.dto';
+import { BillingService } from '../billing/billing.service';
 
 // FR-048f: outstanding (ISSUED) before settled (SETTLED) before voided
 // (VOID), which happens to match the enum's own alphabetical order —
@@ -28,6 +29,8 @@ export class InvoicesService {
     @InjectModel(Invoice.name) private readonly invoiceModel: Model<InvoiceDocument>,
     @InjectModel(Order.name) private readonly orderModel: Model<OrderDocument>,
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
+    @InjectConnection() private readonly connection: Connection,
+    private readonly billingService: BillingService,
   ) {}
 
   /**
@@ -106,6 +109,15 @@ export class InvoicesService {
       }
     }
 
+    // spec 013 T147/FR-062d: "further DEFERRED dealing" — DIRECT orders are paid
+    // immediately via gateway and never extend the fuel company's own exposure to the
+    // platform, so only DEFERRED/CREDIT are gated. Thrown from inside this same
+    // transaction (same pattern as the CREDIT-limit check above it), so a refused
+    // approval leaves the order at PENDING_APPROVAL, never half-approved.
+    if (method === PaymentMethod.DEFERRED || method === PaymentMethod.CREDIT) {
+      await this.billingService.assertUnderCeiling(order.fuelCompanyId, session);
+    }
+
     const payerRole =
       method === PaymentMethod.DEFERRED ? UserRole.TRANSPORT_COMPANY_ADMIN : UserRole.CLIENT;
 
@@ -144,6 +156,10 @@ export class InvoicesService {
       .updateOne({ _id: order._id }, { $set: { invoiceId: invoice._id } }, { session })
       .exec();
 
+    // T142/T143/R4: inside the same transaction as issuance — an invoice can never exist
+    // without its commission having been accrued (or genuinely skipped, no term set).
+    await this.billingService.accrueCommission(order, invoice, session);
+
     return invoice;
   }
 
@@ -179,19 +195,38 @@ export class InvoicesService {
   /** Manual settlement by id (spec 004 FR-022's deferred "settleable only
    * by them", and the analogous Fuel-Company-recorded credit repayment) —
    * `findById` is tenant-scoped, so a cross-tenant id is 404 before this
-   * even runs (`invoices.controller.ts`). */
+   * even runs (`invoices.controller.ts`).
+   *
+   * spec 013 T144: unlike `settleInvoiceForOrder` (already inside the payment webhook's
+   * transaction), this path previously ran with no transaction at all — cashback accrual
+   * needs one (Principle V: a settled invoice must never exist without its cashback
+   * having been accrued, or genuinely skipped), so this now opens its own.
+   */
   async settleById(id: string, paymentReference: string | undefined): Promise<InvoiceDocument> {
-    const invoice = await this.findById(id);
-    return this.applySettlement(invoice, paymentReference);
+    const session = await this.connection.startSession();
+    let settled!: InvoiceDocument;
+    try {
+      await session.withTransaction(async () => {
+        const invoice = await this.invoiceModel.findById(id).session(session).exec();
+        if (!invoice) {
+          throw new NotFoundException('Invoice not found');
+        }
+        settled = await this.applySettlement(invoice, paymentReference, session);
+      });
+    } finally {
+      await session.endSession();
+    }
+    return settled;
   }
 
   private async applySettlement(
     invoice: InvoiceDocument,
     paymentReference: string | undefined,
-    session?: ClientSession,
+    session: ClientSession,
   ): Promise<InvoiceDocument> {
     // Idempotent (FR-026): a repeat call — or one that lost a race to a
-    // cancellation's void — is a no-op, never a second settlement.
+    // cancellation's void — is a no-op, never a second settlement, and never a second
+    // cashback accrual (T144's "as invoices are paid" fires exactly once).
     if (invoice.state !== InvoiceState.ISSUED) {
       return invoice;
     }
@@ -201,6 +236,7 @@ export class InvoicesService {
       invoice.paymentReference = paymentReference;
     }
     await invoice.save({ session });
+    await this.billingService.accrueCashback(invoice, session);
     return invoice;
   }
 
@@ -208,15 +244,30 @@ export class InvoicesService {
    * before settlement. Idempotent: a SETTLED invoice is never silently
    * voided by a late cancellation. Voiding a CREDIT invoice implicitly
    * restores the client's available credit (FR-024/FR-027) — see
-   * {@link getAvailableCredit}. */
+   * {@link getAvailableCredit}.
+   *
+   * spec 013 T149/FR-063: reverses commission (and cashback, on the rare invoice already
+   * SETTLED-then-somehow-voided path — reversal is a no-op for a never-accrued kind
+   * since `reverseMovementsForInvoice` only reverses what it finds) inside the same
+   * transaction as the void itself — the accrual and its reversal are never separately
+   * observable.
+   */
   async voidInvoice(orderId: Types.ObjectId | string, session?: ClientSession): Promise<void> {
-    await this.invoiceModel
+    const invoice = await this.invoiceModel.findOne({ orderId }).session(session ?? null).exec();
+    if (!invoice || invoice.state !== InvoiceState.ISSUED) {
+      return;
+    }
+    const result = await this.invoiceModel
       .updateOne(
         { orderId, state: InvoiceState.ISSUED },
         { $set: { state: InvoiceState.VOID } },
         { session },
       )
       .exec();
+    if (result.modifiedCount === 0 || !session) {
+      return;
+    }
+    await this.billingService.reverseAccrualsForInvoice(invoice._id as Types.ObjectId, session);
   }
 
   /** Auto-scoped per role by the multi-party plugin (T072): a
@@ -227,7 +278,7 @@ export class InvoicesService {
    * buried past the first page by a pile of newer settled ones, since it
    * keeps counting against the client's credit either way. */
   findForUser(
-    filter: { method?: PaymentMethod; state?: InvoiceState; cursor?: string } = {},
+    filter: { method?: PaymentMethod; state?: InvoiceState; cursor?: string; fuelCompanyId?: string } = {},
   ): Promise<PaginatedResponse<InvoiceDocument>> {
     const query: Record<string, unknown> = {};
     if (filter.method !== undefined) {
@@ -235,6 +286,14 @@ export class InvoicesService {
     }
     if (filter.state !== undefined) {
       query.state = filter.state;
+    }
+    // spec 013 T238 (US13): safe to accept unconditionally — the multi-party plugin's
+    // own `.where({fuelCompanyId})` overwrites this key for FCA/TCA/CLIENT regardless of
+    // what is passed (same override precedent as the plugin's own tests), so it is only
+    // ever load-bearing for SUPER_ADMIN, who bypasses the plugin and otherwise sees
+    // every company's invoices mixed together with no way to narrow to one.
+    if (filter.fuelCompanyId !== undefined) {
+      query.fuelCompanyId = filter.fuelCompanyId;
     }
     return paginate(this.invoiceModel, query, INVOICE_SORT_KEYS, filter.cursor);
   }
@@ -261,6 +320,26 @@ export class InvoicesService {
   async getOutstandingSettlementsSummary(): Promise<OutstandingSettlementsSummary> {
     const outstanding = await this.invoiceModel
       .find({ method: PaymentMethod.DEFERRED, state: InvoiceState.ISSUED })
+      .select('amount')
+      .exec();
+    return {
+      amount: roundCurrency(outstanding.reduce((sum, inv) => sum + inv.amount, 0)),
+      currency: DEFAULT_CURRENCY,
+      count: outstanding.length,
+    };
+  }
+
+  /**
+   * spec 013 (fuel company admin dashboard) T111/T113/FR-046 — the Fuel Company's own
+   * "amounts outstanding": CREDIT invoices still ISSUED (money owed by their own
+   * clients), distinct from `getOutstandingSettlementsSummary` above, which is DEFERRED
+   * only (money owed by a transporter) and is what `GET /orders/summary` already returns
+   * to a `TRANSPORT_COMPANY_ADMIN`. Same scoping note applies: relies on the multi-party
+   * plugin's ambient scope rather than an explicit `fuelCompanyId` filter.
+   */
+  async getCreditOutstandingSummary(): Promise<OutstandingSettlementsSummary> {
+    const outstanding = await this.invoiceModel
+      .find({ method: PaymentMethod.CREDIT, state: InvoiceState.ISSUED })
       .select('amount')
       .exec();
     return {

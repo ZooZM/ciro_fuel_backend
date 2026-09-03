@@ -36,6 +36,13 @@ import { governorateBelongsToRegion } from '../regions/regions.constants';
 import { StationsService } from '../stations/stations.service';
 import { InvoicesService } from '../invoices/invoices.service';
 import { PhoneVerificationService } from './services/phone-verification.service';
+import { CreditLimitRequestsService } from './services/credit-limit-requests.service';
+import { LitreBalancesService } from '../litre-balances/litre-balances.service';
+import { CreateCreditLimitRequestDto } from './dto/create-credit-limit-request.dto';
+import { ResolveCreditLimitRequestDto } from './dto/resolve-credit-limit-request.dto';
+import { CreditLimitRequestState } from '../../common/enums/credit-limit-request-state.enum';
+import { NotificationsService } from '../notifications/notifications.service';
+import { NotificationType } from '../../common/enums/notification-type.enum';
 import { CompaniesService } from '../companies/companies.service';
 import { UserThrottlerGuard } from '../../common/guards/user-throttler.guard';
 import { SessionAuditService } from '../sessions/session-audit.service';
@@ -52,6 +59,9 @@ export class UsersController {
     private readonly stationsService: StationsService,
     private readonly invoicesService: InvoicesService,
     private readonly phoneVerificationService: PhoneVerificationService,
+    private readonly creditLimitRequestsService: CreditLimitRequestsService,
+    private readonly litreBalancesService: LitreBalancesService,
+    private readonly notificationsService: NotificationsService,
     private readonly companiesService: CompaniesService,
     private readonly sessionAudit: SessionAuditService,
     private readonly realtimeGateway: RealtimeGatewayService,
@@ -149,12 +159,21 @@ export class UsersController {
   // TRANSPORT_COMPANY_ADMIN sees their own drivers — never each other's.
   @Roles(UserRole.FUEL_COMPANY_ADMIN, UserRole.TRANSPORT_COMPANY_ADMIN, UserRole.SUPER_ADMIN)
   @Get()
-  findAll(@Query('role') role?: UserRole, @Query('isActive') isActive?: string) {
+  findAll(
+    @Query('role') role?: UserRole,
+    @Query('isActive') isActive?: string,
+    @Query('companyId') companyId?: string,
+  ) {
     // An empty value (`?role=&isActive=`, which is what an unset filter in a UI
-    // sends) means "no filter" — not "match empty" or "match inactive".
+    // sends) means "no filter" — not "match empty" or "match inactive". `companyId`
+    // is safe to accept from any role: the tenant-scope plugin's own `.where()`
+    // OVERWRITES this key for FUEL_COMPANY_ADMIN/TRANSPORT_COMPANY_ADMIN regardless
+    // of what's passed (same override precedent the plugin's own tests assert), so
+    // it is only ever load-bearing for SUPER_ADMIN, who bypasses the plugin (T238/US13).
     return this.usersService.findAll({
       role: role || undefined,
       isActive: isActive ? isActive === 'true' : undefined,
+      companyId: companyId || undefined,
     });
   }
 
@@ -183,6 +202,41 @@ export class UsersController {
       consumed: roundCurrency(client.creditLimit - available),
       available,
     };
+  }
+
+  /**
+   * spec 013 FR-029 — the owner raises a request for a higher limit. `me` resolves to
+   * the caller (`JwtStrategy`), never a param. Registered here, ahead of `GET
+   * /users/:id` below, for the exact reason `me/credit` above states.
+   */
+  @Roles(UserRole.CLIENT)
+  @Post('me/credit-limit-requests')
+  async createCreditLimitRequest(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: CreateCreditLimitRequestDto,
+  ) {
+    if (!user.companyId) {
+      throw new BadRequestException('Invalid session');
+    }
+    return this.creditLimitRequestsService.create(user.userId, user.companyId, dto.requestedAmount);
+  }
+
+  // spec 013 FR-029 — the owner's own history and outcomes.
+  @Roles(UserRole.CLIENT)
+  @Get('me/credit-limit-requests')
+  async findMyCreditLimitRequests(@CurrentUser() user: AuthenticatedUser) {
+    const items = await this.creditLimitRequestsService.findForClient(user.userId);
+    return { items };
+  }
+
+  // spec 013 T198/FR-075a/FR-076 — the station owner's own balances, movements
+  // included, never anyone else's. Registered here (not on LitreBalancesController)
+  // for the same `/users/me/...` convention the two routes above already follow.
+  @Roles(UserRole.CLIENT)
+  @Get('me/litre-balances')
+  async findMyLitreBalances(@CurrentUser() user: AuthenticatedUser) {
+    const items = await this.litreBalancesService.listForClient(user.userId);
+    return { items };
   }
 
   /** spec 005 T097/FR-035 — any authenticated role may change their own
@@ -346,6 +400,32 @@ export class UsersController {
     return revoked;
   }
 
+  /**
+   * spec 013 (fuel company admin dashboard) T077 — the admin-facing read counterpart to
+   * `GET /users/me/credit` (CLIENT-only, above): the dashboard's owner-detail screen
+   * needs to SHOW a client's standing without mutating it, and no such route existed
+   * before this feature. Tenant-scoped automatically via `findById`, same as
+   * `setCreditLimit` below — a foreign or nonexistent client 404s here before the
+   * credit derivation runs.
+   */
+  @Roles(UserRole.FUEL_COMPANY_ADMIN)
+  @Get(':id/credit-limit')
+  async getCreditLimit(@Param('id', ObjectIdPipe) id: string) {
+    const target = await this.usersService.findById(id);
+    if (target.role !== UserRole.CLIENT) {
+      throw new BadRequestException('creditLimit may only be read for CLIENT accounts');
+    }
+    if (target.creditLimit == null) {
+      return { creditLimit: null, consumed: null, available: null };
+    }
+    const available = await this.invoicesService.getAvailableCredit(id);
+    return {
+      creditLimit: target.creditLimit,
+      consumed: roundCurrency(target.creditLimit - available),
+      available,
+    };
+  }
+
   // Tenant-scoped automatically (the target must be the acting admin's own
   // client) — spec 004 FR-023: only a Fuel Company sets its clients' credit
   // limits, never a Transportation Company or the client themselves.
@@ -356,7 +436,18 @@ export class UsersController {
     if (target.role !== UserRole.CLIENT) {
       throw new BadRequestException('creditLimit may only be set on CLIENT accounts');
     }
-    return this.usersService.setCreditLimit(id, dto.creditLimit);
+    const updated = await this.usersService.setCreditLimit(id, dto.creditLimit);
+    // spec 013 FR-032: a limit lowered below what the owner has already drawn is
+    // PERMITTED, but the consequence must be stated explicitly, never left as a silent
+    // negative remainder — `available` here reflects the NEW limit against the same
+    // outstanding balance `getAvailableCredit` already computes for the CLIENT-facing
+    // `GET /users/me/credit`, so it can genuinely go negative.
+    const available = await this.invoicesService.getAvailableCredit(id);
+    return {
+      creditLimit: updated.creditLimit,
+      available,
+      consumed: roundCurrency((updated.creditLimit ?? 0) - available),
+    };
   }
 
   /** Self-service or admin-managed avatar upload — feeds a user's profilePictureFileId. */

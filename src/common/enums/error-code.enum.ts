@@ -119,4 +119,63 @@ export enum ErrorCode {
   // An administrator marking a stop handled that is already resolved —
   // typically a second click, or two administrators on the same alert.
   STOP_ALREADY_RESOLVED = 'STOP_ALREADY_RESOLVED',
+
+  // spec 013 (fuel company admin dashboard — live platform integration)
+  // A credit-limit-request resolution attempted after it already carries an
+  // outcome (FR-031). Conditional-update discipline, same as ORDER_ALREADY_ASSIGNED
+  // — the filter names the expected PENDING state, and `modifiedCount` (not a
+  // prior read) decides which of two concurrent resolutions wins (SC-008).
+  LIMIT_REQUEST_ALREADY_RESOLVED = 'LIMIT_REQUEST_ALREADY_RESOLVED',
+  // A company's accrued commission exceeds its ceiling (FR-062d). Carries
+  // `ceiling` and `accrued` as extra fields so the refusal names the number,
+  // never just the fact. Resumes automatically once a CONFIRMED payment
+  // brings the accrued amount back below — this code is never latched.
+  COMMISSION_CEILING_EXCEEDED = 'COMMISSION_CEILING_EXCEEDED',
+  // A recorded payment (`AccountMovement`, kind PAYMENT_RECORDED) carries
+  // neither a `documentFileId` nor a `reference` (FR-067). Validation-shaped
+  // — the request itself is incomplete, not a state conflict.
+  PAYMENT_EVIDENCE_REQUIRED = 'PAYMENT_EVIDENCE_REQUIRED',
+  // The operator confirms a payment that is not RECORDED — either already
+  // CONFIRMED or does not exist in that state (FR-069). Conditional update
+  // on `state: RECORDED`; `modifiedCount` decides, never a prior read.
+  PAYMENT_ALREADY_CONFIRMED = 'PAYMENT_ALREADY_CONFIRMED',
+  // An order already carries a supplier invoice (FR-073e) — `POST` refuses;
+  // `PUT` is the replace path and does not throw this. Read together with
+  // the partial unique index on `LitreBalance.movements.orderId`, this is
+  // what makes a retried upload move a balance once, never twice.
+  SUPPLIER_INVOICE_ALREADY_RECORDED = 'SUPPLIER_INVOICE_ALREADY_RECORDED',
+  // A confirmed supplier-invoice fuel grade differs from the order's own
+  // (FR-073g). Deliberately distinct from SUPPLIER_INVOICE_ORDER_NOT_ELIGIBLE
+  // — this names a data-entry mismatch on an otherwise-eligible order.
+  SUPPLIER_INVOICE_GRADE_MISMATCH = 'SUPPLIER_INVOICE_GRADE_MISMATCH',
+  // A supplier invoice was uploaded or recorded against an order that is
+  // CANCELLED or REJECTED (spec Edge Cases) — there is nothing left to
+  // reconcile a delivered quantity against.
+  SUPPLIER_INVOICE_ORDER_NOT_ELIGIBLE = 'SUPPLIER_INVOICE_ORDER_NOT_ELIGIBLE',
+  // A litre-balance correction submitted with no `reason` (FR-075).
+  // Validation-shaped — every correction MUST carry a reason and be
+  // attributed to the administrator who made it (FR-074a).
+  BALANCE_CORRECTION_REASON_REQUIRED = 'BALANCE_CORRECTION_REASON_REQUIRED',
+  // A supplier-invoice excess would take a litre balance below zero
+  // (FR-073d). The platform still records the movement — this code states
+  // the outcome explicitly at the point of recording rather than leaving a
+  // negative balance unexplained; it is advisory, not a refusal.
+  LITRE_BALANCE_WOULD_GO_NEGATIVE = 'LITRE_BALANCE_WOULD_GO_NEGATIVE',
+  // An exchange request's respond/withdraw was attempted after it already
+  // reached a final outcome (FR-082). Conditional update on
+  // `state: AWAITING_RESPONSE`; `modifiedCount` decides which of a
+  // concurrent accept/withdraw wins — the same idiom as every other
+  // exactly-once resolution on this platform (SC-008).
+  EXCHANGE_ALREADY_RESOLVED = 'EXCHANGE_ALREADY_RESOLVED',
+  // An exchange request named a fuel grade the receiving company does not
+  // sell (FR-085) — refused at submission, before any party-set write.
+  EXCHANGE_GRADE_NOT_SOLD = 'EXCHANGE_GRADE_NOT_SOLD',
+  // The party-set plugin's create-time guard (contracts/isolation-contract.md):
+  // the acting company is absent from `partyCompanyIds`, or the array does
+  // not hold exactly the parties the domain defines. Distinct from every
+  // other isolation refusal on this platform in one way — the existing
+  // plugins FORCE a value on create and cannot fail this way; this one
+  // VALIDATES membership, so a genuine refusal path exists here that has no
+  // equivalent in tenant-scope or multi-party-scope.
+  EXCHANGE_PARTY_INVALID = 'EXCHANGE_PARTY_INVALID',
 }

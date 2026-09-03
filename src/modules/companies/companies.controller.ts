@@ -27,6 +27,7 @@ import { AssignRegionsDto } from './dto/assign-regions.dto';
 import { UpdateCompanyStatusDto } from './dto/update-company-status.dto';
 import { SetFuelPricesDto } from './dto/set-fuel-prices.dto';
 import { SetPricingConfigDto } from './dto/set-pricing-config.dto';
+import { SetCommissionCeilingDto } from './dto/set-commission-ceiling.dto';
 import { ErrorCode } from '../../common/enums/error-code.enum';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -129,6 +130,16 @@ export class CompaniesController {
     return this.companiesService.findAll(user.companyId);
   }
 
+  // Registered BEFORE `:id` — a literal path segment would otherwise be swallowed by
+  // the param route and fail `ObjectIdPipe`. spec 013 Phase 15 (US12): the only way a
+  // fuel company can discover a fuel-exchange counterparty (see `findExchangePartners`'s
+  // own doc comment for why `GET /companies` itself cannot serve this).
+  @Roles(UserRole.FUEL_COMPANY_ADMIN)
+  @Get('exchange-partners')
+  findExchangePartners(@CurrentUser() user: AuthenticatedUser) {
+    return this.companiesService.findExchangePartners(user.companyId!);
+  }
+
   @Get(':id')
   async findOne(@CurrentUser() user: AuthenticatedUser, @Param('id', ObjectIdPipe) id: string) {
     const company = await this.companiesService.findById(id);
@@ -203,6 +214,16 @@ export class CompaniesController {
     return company.pricingConfig;
   }
 
+  // spec 013 FR-033, T086a — genuine platform addition (found during analysis: `create`
+  // below existed with no listing counterpart). `:id` is the acting admin's own Fuel
+  // Company; `assertCompanyAccess` stops FuelCo A's admin from listing FuelCo B's fleet.
+  @Roles(UserRole.FUEL_COMPANY_ADMIN)
+  @Get(':id/transporters')
+  async listTransporters(@CurrentUser() user: AuthenticatedUser, @Param('id', ObjectIdPipe) id: string) {
+    this.assertCompanyAccess(user, id);
+    return this.companiesService.findTransporters(id);
+  }
+
   // spec 004 US2: a Fuel Company creates its own Transportation Companies.
   // `:id` is the acting admin's own Fuel Company — `assertCompanyAccess`
   // stops FuelCo A's admin from creating a transporter under FuelCo B's id.
@@ -271,6 +292,44 @@ export class CompaniesController {
       throw new UnauthorizedException('Invalid credentials');
     }
     return this.companiesService.assignRegions(user.companyId, id, dto.regionCodes);
+  }
+
+  // spec 013 FR-035/FR-036, T086a/T086b — the FUEL-type counterpart to the pair above:
+  // `:id` here IS the acting admin's own company (unlike `:id/regions`, where it is the
+  // transporter being assigned), so this uses `assertCompanyAccess` like `fuel-prices`/
+  // `pricing-config` do, not the transporter-ownership check `assignRegions` uses.
+  @Roles(UserRole.FUEL_COMPANY_ADMIN, UserRole.SUPER_ADMIN)
+  @Get(':id/covered-regions')
+  async getCoveredRegions(@CurrentUser() user: AuthenticatedUser, @Param('id', ObjectIdPipe) id: string) {
+    this.assertCompanyAccess(user, id);
+    const company = await this.companiesService.findById(id);
+    return company.coveredRegions;
+  }
+
+  @Roles(UserRole.FUEL_COMPANY_ADMIN)
+  @Put(':id/covered-regions')
+  async setCoveredRegions(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ObjectIdPipe) id: string,
+    @Body() dto: AssignRegionsDto,
+  ) {
+    this.assertCompanyAccess(user, id);
+    const company = await this.companiesService.setCoveredRegions(id, dto.regionCodes);
+    return company.coveredRegions;
+  }
+
+  // spec 013 T140/FR-062a — SUPER_ADMIN only, deliberately no `assertCompanyAccess` call
+  // (that would ALSO admit the company's own FUEL_COMPANY_ADMIN via the `@Roles` decorator
+  // if it were on the guard list, which it isn't here) — a company must never set or
+  // change its own ceiling, and this route simply doesn't accept that role at all.
+  @Roles(UserRole.SUPER_ADMIN)
+  @Put(':id/commission-ceiling')
+  async setCommissionCeiling(
+    @Param('id', ObjectIdPipe) id: string,
+    @Body() dto: SetCommissionCeilingDto,
+  ) {
+    const company = await this.companiesService.setCommissionCeiling(id, dto.commissionCeiling);
+    return { commissionCeiling: company.commissionCeiling };
   }
 
   /** Company is the tenant root (not plugin-scoped) — ownership is checked explicitly (FR-002 spirit). */

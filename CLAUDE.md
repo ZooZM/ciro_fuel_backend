@@ -1,5 +1,123 @@
 <!-- SPECKIT START -->
-Active feature — read this plan first: `specs/012-production-hardening/plan.md`
+Previously planned feature, now implemented: `specs/013-fuel-company-dashboard/plan.md`
+(connect the FUEL COMPANY ADMIN's web dashboard to the live platform, and build the business
+capabilities four of its screens were drawn against but which exist nowhere on the platform).
+**Implemented — all 13 user stories, 262 of 266 tasks complete** (T001-T259 done; T260-T263 need a
+live environment/human tester this session did not have, see below). Supporting artifacts: `spec.md`
+(13 stories, 122 FRs, 20 SCs, 8 clarifications across two sessions), `research.md` (12 decisions),
+`data-model.md`, `quickstart.md`, `tasks.md` (266 tasks, the full corrections log is in its
+*Corrections* section), `contracts/rest-api-delta.md`, `contracts/dashboard-integration.md`,
+`contracts/isolation-contract.md`. The plan's own Complexity Tracking recommended splitting slices
+9-13 into three follow-on features (014/015/016); that split was **not taken** — all 13 stories
+were built under 013 as the plan's tasks.md specified, the split being offered as a recommendation,
+not a scope reduction.
+
+**Implementation status**: all 13 user stories built and verified. Backend `npm run build` clean,
+`npm run test` **27 suites / 228 tests** green, `npx jest --config test/jest-e2e.json --runInBand`
+green (exit 0 across the full run — the per-suite PASS/FAIL/count lines did not survive this
+session's output capture of a long-running background command, so the exit code is the verified
+signal, not a reproduced table). Dashboard `npx tsc -b --force` clean of every error beyond the
+pre-existing unused-import baseline feature 011 first disclosed (unrelated files, none touched by
+013), `npx vitest run` **76/76** real tests green (the same 2 pre-existing suites that fail to
+*load* — `accessibility.test.tsx`, `orders.mutations.test.tsx`, both importing `@/features/*` paths
+feature 009 deleted). **Mobile was not verified this session**: `mobile_app/` is not present
+anywhere in this session's workspace (only `web_dashboard_ciro_fuel/` exists as a sibling checkout
+alongside this backend repo) — `flutter test` could not be run at all, a different and more basic
+gap than prior features' "same 2 pre-existing non-green tests" disclosures. Feature 013 makes no
+change to mobile_app's own code (its scope is the fuel company web dashboard only), so this is a
+tooling-access gap, not a suspected regression — but it is unverified, not confirmed-unchanged, and
+should be run in a session where the mobile checkout is present before this feature is considered
+fully closed out.
+
+**Not completed — needs a live environment and a human tester this session did not have**: T260
+(walk `quickstart.md` Parts 0-4 end to end with a running dev server + backend), T261 (time SC-003/
+SC-005 during that walkthrough), T262 (run SC-015 as an observed session with a fresh human tester),
+T263 (record any T261/T262 shortfall). Every prior feature in this file documents the identical gap
+for its own quickstart/timed/observed tasks — this is not new to 013.
+
+**Found during the Phase 17 polish pass, after the 13 stories themselves were verified working**:
+two Phase-13-era mock components (`AdminDesktopPlatformAccountTable.tsx`,
+`AdminMobilePlatformAccountList.tsx`) had been fully superseded when Phase 16 wired the operator's
+platform-account screen to real data, reusing the genuine `petrol_company/platform_account`
+components directly — the two mocks were left behind with zero remaining callers and were deleted.
+Six fuel-exchange screens compared `request.state` against raw string literals
+(`'AWAITING_RESPONSE'`, `'ACCEPTED'`) at the point of use even though a purpose-built
+`ExchangeRequestState` constant already existed in `constants/fuel-company.ts` for exactly this
+(written earlier in the same feature, FR-097) — switched to reference it. Two currency-display gaps
+(an invoice amount rendered with no stated currency anywhere in its card/table, one column header
+mislabeled with an unrelated `adminCompanies.suspended` translation key instead of `orders.status`)
+were found and fixed. `AdminDashboard.tsx` (the operator's platform-wide home page — fabricated
+company/order/GMV counts and `16.30%` trend figures on every stat card, reusing `transport_company/
+home/` components that belong to feature 009's scope) and `AdminStationOwnerDetailsPage.tsx`'s
+`MOCK_ORDERS` were both judged **out of scope for 013** rather than rebuilt: no FR in `spec.md`
+names an operator platform-wide home-dashboard requirement, and grepping the spec for `GMV`,
+`platform-wide`, `trading volume` and equivalent Arabic phrasing returns nothing relevant. Left as a
+disclosed gap, following this repository's established precedent for scope decisions made and
+disclosed rather than attempted under time pressure (feature 009's `DeliveryAreasPage.tsx`/
+`NotificationsPage.tsx`).
+
+**The situation it addresses**: `src/petrol_company/`'s 81 files render hardcoded Arabic sample rows;
+only the order approve/reject/force-complete actions reach the platform. Underneath that,
+**no fuel company administrator can sign in to the dashboard at all** — `constants/roles.ts` still
+carries `COMPANY_ADMIN` with neither company role, `RoleSelectionPage` is still routed at
+`/select-role`, and the `'dummy-token'` bypass is live in three files. Feature 009 recorded all of
+this as fixed; **it is not fixed on the dashboard's `main`** (commit `17f6bd5` is titled for it and
+did not land it). `FUEL_COMPANY_ADMIN` appears as an inline string in five files while the constant
+does not exist — which is exactly why the type system never caught it. The guard is wrong in the
+dangerous direction too: `/petrolCompany` admits `[CLIENT, COMPANY_ADMIN]`, so a station owner
+passes the guard for the screen that sets their own credit limit and prices.
+
+**The keystone finding (research R3)**: **neither isolation plugin can express a record owned by two
+fuel companies, and a fuel exchange request is exactly that.** Both `tenant-scope` and
+`multi-party-scope` filter by equality with one company id and *force* that id on create. Mark
+`ExchangeRequest` multi-party and it compiles, passes review, and passes every single-company test —
+while the recipient's incoming list is **silently, permanently empty**: A raises (stamped
+`fuelCompanyId = A`), B lists (filter `fuelCompanyId = B`), no match, no error, an empty state
+indistinguishable from "nobody sent you anything". Worse, **`SUPER_ADMIN` bypasses both plugins**, so
+the operator's exchange screen — the one most likely to be demoed — shows everything correctly while
+both fuel companies see nothing. Only a two-fuel-company test asserting the *recipient* can read it
+detects this. Hence a third mechanism, `party-set-scope.plugin.ts`, scoping by array membership
+rather than equality; the one Complexity Tracking entry, following the precedent by which the
+multi-party plugin was itself added alongside the tenant plugin rather than replacing it.
+
+**Corrections found while planning** — each is a case where following the spec as written would have
+been wrong or wasteful:
+· **`GET /orders/summary` needs one token, not an endpoint.** The handler takes no user parameter
+(`getSummary(start, end)`); the multi-party plugin already returns `{ fuelCompanyId }` for
+`FUEL_COMPANY_ADMIN`. The role is excluded by decorator only.
+· **Station listing needs no new scoping.** `Station` is `markTenantScoped`, so a fuel company
+admin's query is already filtered to their own company. The spec called both of these "platform
+additions"; they are a decorator change and a controller route.
+· **Invoices are issued at APPROVAL, not delivery** (`orders.service.ts:270`, inside
+`approve`'s transaction). The spec's Story 6 rationale was false and is corrected — invoices are
+exercisable without a driver, a truck or a delivery. Commission therefore accrues at approval, inside
+a transaction that already exists, satisfying Principle V with no new transaction.
+· **A quote must consume no litres.** Only order *creation* draws a balance down; a quote that moved
+it would leak litres on every abandoned quote.
+· **Extraction is a seam that can ship empty.** FR-073a-ii (confirmation is what is recorded) and
+FR-073a-iii (manual entry when extraction yields nothing) together mean a *null* extractor is a fully
+working feature — so the least predictable part of the work is also the only deferrable part. The
+standard tax-invoice QR carries seller, tax registration, timestamp and totals but **not line
+quantities**, so there is no cheap structured path to the number that matters.
+· **Only fuel exchange crosses a company boundary.** The temptation is to reach for the multi-party
+plugin for anything with several readers; the right test is whether several *companies* must read it.
+Litre balances, account movements and credit-limit requests are all single-owner — `Station` already
+proves clients read `markTenantScoped` records today.
+
+**Recommended split (plan Complexity Tracking)**: slices 0–8 connect what exists and deliver the
+stated goal on their own; slices 9–13 build four new business domains (commission/cashback with
+accrual and enforcement, a settlement ledger, supplier-invoice reconciliation with litre balances
+reaching into client order creation, and inter-company exchange). Natural shape: **013** = 0–8,
+**014** = commission/settlement, **015** = supplier invoices/litre balances, **016** = fuel exchange
+with its isolation mechanism. The plan covers all 13 stories as specified; the split is a
+recommendation, not a scope reduction.
+
+**Open decision before Slice 10**: audit of commission accrual and payment confirmation. Litre
+balances and extraction carry attribution; money movements between a company and the platform do
+not. A ledger that cannot say who confirmed a payment is very hard to retrofit once it holds real
+balances.
+
+Previously implemented feature: `specs/012-production-hardening/plan.md`
 (close the operational gaps that decide whether a production incident is a five-minute fix or a
 silent failure, **without changing one byte of platform behaviour** — a liveness signal, graceful
 shutdown, production CORS, proxy-aware rate limiting, structured logs, durable document storage,

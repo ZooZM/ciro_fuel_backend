@@ -32,7 +32,13 @@ import { paginate, PaginatedResponse } from '../../common/pagination/paginate.ut
 import { CursorSortField } from '../../common/pagination/cursor.util';
 import { PricingService } from './services/pricing.service';
 import { StationsService } from '../stations/stations.service';
-import { OrderSummaryDto } from './dto/order-summary.dto';
+import { OrderSummaryDto, FuelCompanySummaryDto } from './dto/order-summary.dto';
+import { LitreBalancesService, DrawdownResult } from '../litre-balances/litre-balances.service';
+
+export interface CreateOrderResult {
+  order: OrderDocument;
+  litreDrawdown: DrawdownResult;
+}
 
 // Matches the `{ clientId, updatedAt, _id }` / `{ clientId, status,
 // updatedAt, _id }` indexes on Order (spec 005 FR-048/research R3).
@@ -63,6 +69,7 @@ export class OrdersService {
     private readonly stationsService: StationsService,
     private readonly assignmentEscalationQueue: AssignmentEscalationQueueService,
     private readonly stopEscalationQueue: StopEscalationQueueService,
+    private readonly litreBalancesService: LitreBalancesService,
   ) {}
 
   private getPaymentDeadlineMinutes(): number {
@@ -84,7 +91,7 @@ export class OrdersService {
     return order;
   }
 
-  async create(clientUser: AuthenticatedUser, dto: CreateOrderDto): Promise<OrderDocument> {
+  async create(clientUser: AuthenticatedUser, dto: CreateOrderDto): Promise<CreateOrderResult> {
     if (!clientUser.companyId) {
       throw new ForbiddenException('Client must belong to a company');
     }
@@ -121,7 +128,7 @@ export class OrdersService {
 
     const estimatedPrice = Number((basePrice * dto.quantityLiters).toFixed(2));
 
-    return this.orderModel.create({
+    return this.createWithDrawdown(clientUser, dto.fuelType, dto.quantityLiters, {
       fuelCompanyId: new Types.ObjectId(clientUser.companyId),
       clientId: new Types.ObjectId(clientUser.userId),
       fuelType: dto.fuelType,
@@ -150,7 +157,7 @@ export class OrdersService {
     clientUser: AuthenticatedUser,
     client: UserDocument,
     dto: CreateOrderDto,
-  ): Promise<OrderDocument> {
+  ): Promise<CreateOrderResult> {
     if (!dto.stationId) {
       throw new BadRequestException('stationId is required when quoteToken is supplied');
     }
@@ -169,7 +176,7 @@ export class OrdersService {
         }
       : station.location;
 
-    return this.orderModel.create({
+    return this.createWithDrawdown(clientUser, dto.fuelType, dto.quantityLiters, {
       fuelCompanyId: new Types.ObjectId(clientUser.companyId),
       clientId: new Types.ObjectId(clientUser.userId),
       fuelType: dto.fuelType,
@@ -182,6 +189,42 @@ export class OrdersService {
       estimatedPrice: priceBreakdown.total,
       paymentMethod: dto.paymentMethod ?? PaymentMethod.DIRECT,
     });
+  }
+
+  /**
+   * spec 013 T194/T195/R9/Principle V — the order and its litre-balance drawdown commit
+   * in ONE transaction: an order can never exist whose drawdown was never applied, and a
+   * drawdown can never be recorded against an order that failed to create. This is the
+   * "existing creation transaction" T194 refers to — order creation had none before this
+   * phase (a single-document `create()` needed none); litre balances are the first thing
+   * that makes it a genuinely multi-document write.
+   */
+  private async createWithDrawdown(
+    clientUser: AuthenticatedUser,
+    fuelType: CreateOrderDto['fuelType'],
+    quantityLiters: number,
+    orderFields: Record<string, unknown>,
+  ): Promise<CreateOrderResult> {
+    const session = await this.connection.startSession();
+    let result!: CreateOrderResult;
+    try {
+      await session.withTransaction(async () => {
+        const [order] = await this.orderModel.create([orderFields], { session });
+        const litreDrawdown = await this.litreBalancesService.drawdown(
+          order.fuelCompanyId,
+          order.clientId,
+          fuelType,
+          order._id as Types.ObjectId,
+          quantityLiters,
+          clientUser.userId,
+          session,
+        );
+        result = { order, litreDrawdown };
+      });
+    } finally {
+      await session.endSession();
+    }
+    return result;
   }
 
   async findById(id: string): Promise<OrderDocument> {
@@ -518,6 +561,18 @@ export class OrdersService {
         if (order.invoiceId) {
           await this.invoicesService.voidInvoice(order._id as Types.ObjectId, session);
         }
+        // spec 013 T197/spec Edge Cases: a cancelled order returns whatever it drew down
+        // (a no-op if it never drew anything) — inside the same transaction as the
+        // cancellation itself, so an order can never end up CANCELLED with its drawdown
+        // left applied, or vice versa.
+        await this.litreBalancesService.returnDrawdown(
+          order.fuelCompanyId,
+          order.clientId,
+          order.fuelType,
+          order._id as Types.ObjectId,
+          actor.actorId,
+          session,
+        );
       });
       if (from === OrderStatus.ASSIGNED_TO_DRIVER || from === OrderStatus.PENDING_PAYMENT) {
         await this.paymentTimeoutQueue.cancel(String(order._id));
@@ -667,6 +722,61 @@ export class OrdersService {
       completedInPeriod,
       driversOnDuty,
       outstandingSettlements,
+    };
+  }
+
+  /**
+   * spec 013 (fuel company admin dashboard) T111/T113/FR-044/FR-046 — the
+   * FUEL_COMPANY_ADMIN counterpart to `getSummary` above, genuinely different fields
+   * rather than a role branch inside one method (see `FuelCompanySummaryDto`'s own
+   * comment). `pendingApproval`/`inProgress`/`completedInPeriod` go through
+   * `orderModel.countDocuments`, scoped by the multi-party plugin exactly like
+   * `getSummary`'s equivalents; `stationOwnersCount` through `userModel.countDocuments`,
+   * scoped by the single-tenant plugin exactly like `getSummary`'s `driversOnDuty` (just
+   * `CLIENT` instead of `DRIVER`, and meaningful for this role since clients DO belong to
+   * a fuel company); `stationsCount` and `creditOutstanding` delegate to their owning
+   * services rather than reaching into their models directly.
+   */
+  async getFuelCompanySummary(from: Date, to: Date): Promise<FuelCompanySummaryDto> {
+    const [
+      pendingApproval,
+      inProgress,
+      completedInPeriod,
+      stationOwnersCount,
+      stationsCount,
+      creditOutstanding,
+    ] = await Promise.all([
+      this.orderModel.countDocuments({ status: OrderStatus.PENDING_APPROVAL }).exec(),
+      this.orderModel
+        .countDocuments({
+          status: {
+            $in: [
+              OrderStatus.ASSIGNED_TO_DRIVER,
+              OrderStatus.LOADING,
+              OrderStatus.IN_TRANSIT,
+              OrderStatus.UNLOADING,
+            ],
+          },
+        })
+        .exec(),
+      this.orderModel
+        .countDocuments({
+          status: OrderStatus.DELIVERED,
+          deliveredAt: { $gte: from, $lte: to },
+        })
+        .exec(),
+      this.userModel.countDocuments({ role: UserRole.CLIENT }).exec(),
+      this.stationsService.countForCompany(),
+      this.invoicesService.getCreditOutstandingSummary(),
+    ]);
+
+    return {
+      pendingApproval,
+      inProgress,
+      completedInPeriod,
+      stationOwnersCount,
+      stationsCount,
+      creditOutstanding,
     };
   }
 }

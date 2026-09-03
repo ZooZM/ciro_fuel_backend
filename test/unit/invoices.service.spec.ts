@@ -41,7 +41,24 @@ describe('InvoicesService — credit arithmetic (SC-004)', () => {
       OrderSchema,
     ) as unknown as mongoose.Model<OrderDocument>;
     UserModel = connection.model(User.name, UserSchema) as unknown as mongoose.Model<UserDocument>;
-    service = new InvoicesService(InvoiceModel, OrderModel, UserModel);
+    // spec 013 T142/T144/T147/T149: this file proves credit arithmetic only — commission/
+    // cashback accrual and ceiling enforcement have their own coverage
+    // (billing.service.spec.ts, commission-*.e2e-spec.ts). A no-op stand-in keeps
+    // `issueInvoice`/`voidInvoice`'s new billing hooks from needing a real `BillingService`
+    // here, matching this file's own precedent of not exercising the full DI graph.
+    const billingServiceStub = {
+      assertUnderCeiling: async () => {},
+      accrueCommission: async () => {},
+      accrueCashback: async () => {},
+      reverseAccrualsForInvoice: async () => {},
+    } as unknown as import('../../src/modules/billing/billing.service').BillingService;
+    service = new InvoicesService(
+      InvoiceModel,
+      OrderModel,
+      UserModel,
+      {} as Connection,
+      billingServiceStub,
+    );
   }, 120_000);
 
   afterAll(async () => {

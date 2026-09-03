@@ -9,7 +9,10 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { OrdersService } from './orders.service';
@@ -48,6 +51,10 @@ import { QuoteOrderDto } from './dto/quote-order.dto';
 import { StopDetectionService } from '../stop-detection/stop-detection.service';
 import { DeclareStopDto } from './dto/declare-stop.dto';
 import { SubmitStopReasonDto } from './dto/submit-stop-reason.dto';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { SupplierInvoicesService } from './services/supplier-invoices.service';
+import { ConfirmSupplierInvoiceDto } from './dto/confirm-supplier-invoice.dto';
+import { LitreBalancesService } from '../litre-balances/litre-balances.service';
 
 @Controller({ path: 'orders', version: '1' })
 export class OrdersController {
@@ -64,12 +71,18 @@ export class OrdersController {
     private readonly ratingsService: RatingsService,
     private readonly vehicleVerificationService: VehicleVerificationService,
     private readonly stopDetectionService: StopDetectionService,
+    private readonly supplierInvoicesService: SupplierInvoicesService,
+    private readonly litreBalancesService: LitreBalancesService,
   ) {}
 
   @Roles(UserRole.CLIENT)
   @Post()
-  create(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreateOrderDto) {
-    return this.ordersService.create(user, dto);
+  async create(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreateOrderDto) {
+    // spec 013 T195/FR-074: `litreDrawdown` is additive on the response — every existing
+    // reader of this endpoint (both mobile clients) keeps working against the fields it
+    // already reads; this is a new field, not a reshaped one.
+    const { order, litreDrawdown } = await this.ordersService.create(user, dto);
+    return { ...order.toObject(), litreDrawdown };
   }
 
   /**
@@ -83,24 +96,44 @@ export class OrdersController {
   @Post('quote')
   async quote(@CurrentUser() user: AuthenticatedUser, @Body() dto: QuoteOrderDto) {
     await this.stationsService.findOwnedByClient(dto.stationId, user.userId);
-    return this.pricingService.quote(user.companyId!, dto.fuelType, dto.quantityLiters);
+    const quote = await this.pricingService.quote(user.companyId!, dto.fuelType, dto.quantityLiters);
+    // spec 013 T196/R9: a PROJECTION only — this call never writes, so an abandoned quote
+    // (the overwhelming majority of quotes, by construction — see `PricingService`'s own
+    // discipline of never committing anything at quote time) leaks no litres.
+    const litreDrawdown = await this.litreBalancesService.projectDrawdown(
+      user.companyId!,
+      user.userId,
+      dto.fuelType,
+      dto.quantityLiters,
+    );
+    return { ...quote, litreDrawdown };
   }
 
   /**
-   * Feature 009 FR-059-061/FR-067: the transport dashboard's whole overview in one
-   * request. Restricted to TRANSPORT_COMPANY_ADMIN/SUPER_ADMIN, not the wider set
-   * originally sketched in planning — `driversOnDuty` and `awaitingAssignment`
-   * (ROUTED_TO_TRANSPORT) are transporter-specific concepts with no meaningful
-   * equivalent for a fuel company, which has no consumer of this endpoint in this
-   * feature. `from`/`to` default to the current month when omitted; both are read as
-   * whole-day boundaries.
+   * Feature 009 FR-059-061/FR-067, extended by spec 013 T109/T111/FR-044/FR-046: the
+   * dashboard overview for whichever role calls it. TRANSPORT_COMPANY_ADMIN/SUPER_ADMIN
+   * keep the original `OrderSummaryDto` shape (`driversOnDuty`/`awaitingAssignment` are
+   * meaningful for a transporter, and SUPER_ADMIN bypasses isolation for a genuine
+   * platform-wide read of it). FUEL_COMPANY_ADMIN gets `FuelCompanySummaryDto` instead —
+   * a real, different shape, not the same fields with the meaningless ones zeroed out
+   * (T111's finding: `driversOnDuty` would always be 0 for this role, since drivers
+   * belong to transport companies, and `awaitingAssignment` names a decision point that
+   * isn't this role's to make). `from`/`to` default to the current month when omitted;
+   * both are read as whole-day boundaries.
    */
-  @Roles(UserRole.TRANSPORT_COMPANY_ADMIN, UserRole.SUPER_ADMIN)
+  @Roles(UserRole.TRANSPORT_COMPANY_ADMIN, UserRole.SUPER_ADMIN, UserRole.FUEL_COMPANY_ADMIN)
   @Get('summary')
-  async summary(@Query('from') from?: string, @Query('to') to?: string) {
+  async summary(
+    @CurrentUser() user: AuthenticatedUser,
+    @Query('from') from?: string,
+    @Query('to') to?: string,
+  ) {
     const now = new Date();
     const start = from ? new Date(from) : new Date(now.getFullYear(), now.getMonth(), 1);
     const end = to ? new Date(to) : now;
+    if (user.role === UserRole.FUEL_COMPANY_ADMIN) {
+      return this.ordersService.getFuelCompanySummary(start, end);
+    }
     return this.ordersService.getSummary(start, end);
   }
 
@@ -142,6 +175,41 @@ export class OrdersController {
    * endpoint is a rule the next endpoint silently does not have. Any future
    * order-returning route for a customer belongs here too.
    */
+  /**
+   * spec 013 T193/FR-073b/FR-073f — the raw `supplierInvoices` array (every superseded
+   * entry, `fileId`s, `extracted` values) is retrievable "by the fuel company that
+   * uploaded it and by the platform operator, and by no one else" — narrower than
+   * `verifications`/`tankSummary` below, which DRIVER and TRANSPORT_COMPANY_ADMIN both
+   * see. Absent (key omitted entirely), not null, when nothing has been confirmed yet
+   * (SC-014c) — a null-filled shape would look like a supplier invoice that was recorded
+   * and simply had no values, which is a different fact.
+   */
+  private buildSupplierInvoiceView(
+    order: OrderDocument,
+    user: AuthenticatedUser,
+  ): Record<string, unknown> | undefined {
+    if (user.role !== UserRole.FUEL_COMPANY_ADMIN && user.role !== UserRole.SUPER_ADMIN) {
+      return undefined;
+    }
+    const current = order.supplierInvoices.find((si) => !si.supersededAt && si.confirmed);
+    if (!current?.confirmed) {
+      return undefined;
+    }
+    const orderedQuantityLitres = order.quantityLiters;
+    const suppliedQuantityLitres = current.confirmed.quantityLitres;
+    return {
+      fileId: current.fileId,
+      extracted: current.extracted ?? null,
+      confirmed: current.confirmed,
+      confirmedBy: current.confirmedBy ?? null,
+      confirmedAt: current.confirmedAt ?? null,
+      orderedQuantityLitres,
+      suppliedQuantityLitres,
+      proportionFulfilled: orderedQuantityLitres > 0 ? suppliedQuantityLitres / orderedQuantityLitres : 0,
+      shortfallLitres: orderedQuantityLitres - suppliedQuantityLitres,
+    };
+  }
+
   private toRoleScopedShape(
     order: OrderDocument,
     user: AuthenticatedUser,
@@ -170,6 +238,13 @@ export class OrdersController {
       // as safety and delivery visibility for the transporter who employs
       // the driver, and widening the audience would change what it is.
       delete base.stopEvents;
+    }
+    // spec 013 T193/FR-073f: the raw array is never exposed to anyone, under any role —
+    // narrower than every field above it. The shaped `supplierInvoice` field replaces it.
+    delete base.supplierInvoices;
+    const supplierInvoice = this.buildSupplierInvoiceView(order, user);
+    if (supplierInvoice) {
+      base.supplierInvoice = supplierInvoice;
     }
     return base;
   }
@@ -769,5 +844,75 @@ export class OrdersController {
       throw new BadRequestException(`Order is not ${expectedStatus}`);
     }
     return order;
+  }
+
+  /**
+   * spec 013 T185/FR-073a-i/SC-014c — stores the document and attempts extraction.
+   * Records nothing and moves no balance (a genuinely separate step from `confirm`
+   * below, unlike `files.controller.ts`'s single-step upload elsewhere on the
+   * platform) — the administrator reviews what came back before anything is written.
+   */
+  @Roles(UserRole.FUEL_COMPANY_ADMIN)
+  @Post(':id/supplier-invoice/upload')
+  @UseInterceptors(FileInterceptor('file'))
+  async uploadSupplierInvoice(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ObjectIdPipe) id: string,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (!file) {
+      throw new BadRequestException('file is required');
+    }
+    const order = await this.ordersService.findById(id);
+    return this.supplierInvoicesService.upload(order, user.userId, {
+      buffer: file.buffer,
+      mimeType: file.mimetype,
+      originalName: file.originalname,
+    });
+  }
+
+  /** T186/FR-073a-ii/FR-073c/FR-073d — records the confirmed invoice and applies the
+   * balance movement in one transaction. Refused with `SUPPLIER_INVOICE_ALREADY_RECORDED`
+   * if this order already has one — `PUT` is the replace path, immediately below. */
+  @Roles(UserRole.FUEL_COMPANY_ADMIN)
+  @Post(':id/supplier-invoice')
+  async confirmSupplierInvoice(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ObjectIdPipe) id: string,
+    @Body() dto: ConfirmSupplierInvoiceDto,
+  ) {
+    const order = await this.ordersService.findById(id);
+    const { order: updated, shortfallLitres, wentNegative } = await this.supplierInvoicesService.confirm(
+      order,
+      dto,
+      user.userId,
+    );
+    return {
+      ...this.toRoleScopedShape(updated, user),
+      shortfallLitres,
+      ...(wentNegative ? { balanceWarning: ErrorCode.LITRE_BALANCE_WOULD_GO_NEGATIVE } : {}),
+    };
+  }
+
+  /** T192/FR-073e — supersedes the current invoice (if any) and restates the balance
+   * movement, never applying a second one for the same order. */
+  @Roles(UserRole.FUEL_COMPANY_ADMIN)
+  @Put(':id/supplier-invoice')
+  async replaceSupplierInvoice(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ObjectIdPipe) id: string,
+    @Body() dto: ConfirmSupplierInvoiceDto,
+  ) {
+    const order = await this.ordersService.findById(id);
+    const { order: updated, shortfallLitres, wentNegative } = await this.supplierInvoicesService.replace(
+      order,
+      dto,
+      user.userId,
+    );
+    return {
+      ...this.toRoleScopedShape(updated, user),
+      shortfallLitres,
+      ...(wentNegative ? { balanceWarning: ErrorCode.LITRE_BALANCE_WOULD_GO_NEGATIVE } : {}),
+    };
   }
 }

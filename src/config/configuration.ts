@@ -149,6 +149,17 @@ export interface AppConfig {
     leaseTtlMs: number;
     leaseEnabled: boolean;
   };
+  // spec 013 (fuel company admin dashboard) FR-062b — the ceiling that
+  // governs a company for which the operator has set none, so no company is
+  // ever without one. Deliberately REQUIRED with no `.default()`: this is a
+  // real financial policy value, not an operational knob, and feature 012's
+  // own findings are the reason it is not guessed — an absent
+  // `CORS_ALLOWED_ORIGINS`/`GCS_BUCKET` silently defaulting to `''` shipped
+  // broken twice already. Failing at boot when unset is the fix, applied
+  // here before the same mistake has a chance to repeat.
+  billing: {
+    defaultCommissionCeiling: number;
+  };
 }
 
 export default (): AppConfig => ({
@@ -317,5 +328,13 @@ export default (): AppConfig => ({
     // dead holder's lease expires before the next tick (FR-056b/FR-058).
     leaseTtlMs: parseInt(process.env.SCHEDULER_LEASE_TTL_MS ?? '55000', 10),
     leaseEnabled: process.env.SCHEDULER_LEASE_ENABLED !== 'false',
+  },
+  billing: {
+    // No `??` fallback: `validationSchema` runs before `load` factories and
+    // requires this value (see validation.ts), so by the time this factory
+    // runs `process.env.PLATFORM_DEFAULT_COMMISSION_CEILING` is guaranteed
+    // present and numeric — the same ordering `otp.expiryMinutes` above and
+    // every other required() value on this platform already relies on.
+    defaultCommissionCeiling: parseFloat(process.env.PLATFORM_DEFAULT_COMMISSION_CEILING!),
   },
 });

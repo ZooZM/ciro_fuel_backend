@@ -7,8 +7,8 @@
 name: Deploy
 
 on:
-  push:
-    branches: [main]
+  # push:
+  #   branches: [main]
   # Lets you re-run a deploy without pushing — useful when a deploy failed for
   # an environmental reason rather than a code one.
   workflow_dispatch:

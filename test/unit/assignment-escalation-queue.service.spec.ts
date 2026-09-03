@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Queue, Worker, type Job } from 'bullmq';
+import Redis from 'ioredis';
 import { AssignmentEscalationQueueService } from '../../src/modules/assignment-escalation/queues/assignment-escalation-queue.service';
 import { TenantContextService } from '../../src/common/context/tenant-context.service';
 
@@ -26,6 +27,32 @@ describe('AssignmentEscalationQueueService (durability & rate-capping)', () => {
   let service: AssignmentEscalationQueueService;
   const workers: Worker[] = [];
 
+  beforeAll(async () => {
+    // An absent Redis is otherwise not an error but a hang: ioredis retries
+    // forever, so every test here burns its full 60s timeout and the failure
+    // names a timeout rather than the missing dependency. This suite is
+    // Redis-backed by design (see above) — say so in under two seconds.
+    const probe = new Redis({
+      ...connectionOptionsFromUrl(REDIS_URL),
+      lazyConnect: true,
+      connectTimeout: 2000,
+      retryStrategy: () => null,
+      maxRetriesPerRequest: 1,
+    });
+    probe.on('error', () => undefined); // an unhandled 'error' event would crash the run
+    try {
+      await probe.connect();
+      await probe.ping();
+    } catch (err) {
+      throw new Error(
+        `Redis is required by this suite but is unreachable at ${REDIS_URL} (${(err as Error).message}). ` +
+          "Start one ('docker compose up -d redis') or point REDIS_URL at a running instance.",
+      );
+    } finally {
+      probe.disconnect();
+    }
+  });
+
   beforeEach(() => {
     queueName = `assignment-escalation-test-${randomUUID()}`;
     queue = new Queue(queueName, { connection: connectionOptionsFromUrl(REDIS_URL) });
@@ -37,6 +64,9 @@ describe('AssignmentEscalationQueueService (durability & rate-capping)', () => {
 
   afterEach(async () => {
     await Promise.all(workers.splice(0).map((w) => w.close()));
+    // beforeAll may have aborted before beforeEach ever built one; without this,
+    // its one legible failure is buried under a TypeError per test.
+    if (!queue) return;
     await queue.obliterate({ force: true }).catch(() => undefined);
     await queue.close();
   });

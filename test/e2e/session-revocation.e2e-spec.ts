@@ -159,4 +159,59 @@ describe('Session revocation (spec 006 US5)', () => {
 
     await userModel.updateOne({ _id: fixtures.companyA.driver.id }, { $set: { isActive: true } });
   });
+
+  /**
+   * spec 013 FR-090/Edge Cases: "refused, with the reason stated rather than an empty
+   * dashboard." Mirrors the deactivation test above exactly, but for company-level
+   * suspension — and additionally asserts the login boundary stays generic, the same
+   * property the account-deactivation test above already proves for that case.
+   */
+  it('suspending a fuel company refuses its administrator with cause COMPANY_SUSPENDED — on a live session, never at login', async () => {
+    const server = app.getHttpServer();
+    const login = await request(server)
+      .post('/api/v1/auth/login')
+      .send({ email: fixtures.companyA.admin.email, password: DEFAULT_PASSWORD })
+      .expect(201);
+
+    // Live session works before suspension.
+    await request(server)
+      .get('/api/v1/auth/me')
+      .set('Authorization', `Bearer ${login.body.accessToken}`)
+      .expect(200);
+
+    await request(server)
+      .patch(`/api/v1/companies/${fixtures.companyA.companyId}/status`)
+      .set('Authorization', `Bearer ${fixtures.superAdmin.token}`)
+      .send({ status: 'SUSPENDED' })
+      .expect(200);
+
+    // The live session immediately reveals the specific reason.
+    const staleAttempt = await request(server)
+      .get('/api/v1/auth/me')
+      .set('Authorization', `Bearer ${login.body.accessToken}`)
+      .expect(401);
+    expect(staleAttempt.body.error).toBe('SESSION_REVOKED');
+    expect(staleAttempt.body.cause).toBe('COMPANY_SUSPENDED');
+
+    // A FRESH login attempt (no live session yet) stays generic — distinguishing
+    // "company suspended" from "wrong password" at the raw login boundary would hand a
+    // password-guessing attacker an oracle for exactly the case anti-enumeration exists
+    // to deny (see SessionRevocationCause.COMPANY_SUSPENDED's own comment).
+    const wrongPassword = await request(server)
+      .post('/api/v1/auth/login')
+      .send({ email: fixtures.companyA.admin.email, password: 'WrongPassword1!' })
+      .expect(401);
+    const suspendedLoginAttempt = await request(server)
+      .post('/api/v1/auth/login')
+      .send({ email: fixtures.companyA.admin.email, password: DEFAULT_PASSWORD })
+      .expect(401);
+    expect(suspendedLoginAttempt.body).toEqual(wrongPassword.body);
+
+    // Restore fixture state — companyA is shared across the whole suite run.
+    await request(server)
+      .patch(`/api/v1/companies/${fixtures.companyA.companyId}/status`)
+      .set('Authorization', `Bearer ${fixtures.superAdmin.token}`)
+      .send({ status: 'ACTIVE' })
+      .expect(200);
+  });
 });

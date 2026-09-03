@@ -458,6 +458,112 @@ the existing notification path (FR-038b) — no second delivery mechanism. `orde
 must belong to the caller — **404** otherwise. State moves `SUBMITTED` → `ACKNOWLEDGED` only,
 never back; acknowledging an already-acknowledged request is **409**.
 
+## Fuel company dashboard (spec 013)
+
+Connects the FUEL_COMPANY_ADMIN's dashboard to the platform and adds the business capability four
+of its screens were drawn against but which did not exist anywhere on the platform: commission and
+cashback with accrual and enforcement, a settlement ledger, supplier-invoice reconciliation with
+client litre balances, and inter-company fuel exchange. `FCA` = FUEL_COMPANY_ADMIN, `SA` =
+SUPER_ADMIN, `CL` = CLIENT below.
+
+**Changes to existing endpoints**: `GET /orders/summary` now also admits `FCA` (the handler takes
+no user parameter — it was already correctly scoped by the multi-party plugin, so this is a
+decorator change, not new logic). `GET /orders` and `GET /orders/:id` responses gain
+`supplierInvoice` (present only where recorded) and `POST /orders`/`POST /orders/quote` gain
+`litreDrawdown` — see Litre balances below. `GET /invoices` now also admits `SA`, and gains an
+optional `?fuelCompanyId=` filter meaningful only to `SA` (the owning multi-party plugin overwrites
+it for every other role, so accepting it from any caller is a safe no-op for a tenant-scoped one).
+`GET /platform-account/movements` gained the identical `?companyId=` pattern. `GET /users` gained
+`?companyId=`, and `GET /stations/all` (itself new — see below) gained `?companyId=`, both the same
+way. **Fuel company region coverage**: `Company.servedRegions` was TRANSPORT-only; a FUEL-type
+company had no field recording the regions it covers itself — `coveredRegions` and its two routes
+below are a genuine platform addition, not a pattern-match with an existing mechanism.
+
+| Method | Path | Roles | Notes |
+|--------|------|-------|-------|
+| GET | `/companies/:id/covered-regions` | FCA, SA | Same access rule as `fuel-prices`/`pricing-config` — the owning company and the operator |
+| PUT | `/companies/:id/covered-regions` | FCA | Own company only |
+| GET | `/companies/exchange-partners` | FCA | Every other active FUEL-type company, for the fuel-exchange recipient picker — excludes the caller's own company |
+| PUT | `/companies/:id/commission-ceiling` | SA | Absent ⇒ the platform-wide default ceiling governs (FR-062b) |
+| GET | `/stations/all?companyId=` | FCA, SA | Every station of the acting (or, for SA, named) fuel company across all its owners — `GET /stations` bare stays CLIENT-only; Nest cannot bind two role-gated handlers to one path |
+
+**Credit limit requests** — a client requests a raise, their fuel company resolves it.
+
+| Method | Path | Roles | Notes |
+|--------|------|-------|-------|
+| POST | `/users/me/credit-limit-requests` | CL | `409` while one is already `PENDING` |
+| GET | `/users/me/credit-limit-requests` | CL | The owner's own history and outcomes |
+| GET | `/credit-limit-requests?state=` | FCA | The administrator's queue |
+| PATCH | `/credit-limit-requests/:id/resolve` | FCA | `{ accept: boolean, grantedAmount? }`. Conditional on `state: PENDING` → `409` if already resolved. Accepting writes the new limit and the resolution in one transaction |
+
+**Supplier invoices and litre balances** — volume enters the platform from an Aramco invoice, not
+from delivery; a driver enters no quantity anywhere. Extraction is a seam that can ship empty
+(`extracted` may be null) — FR-073a-iii's manual entry is what makes the feature work with no
+extractor at all.
+
+| Method | Path | Roles | Notes |
+|--------|------|-------|-------|
+| POST | `/orders/:id/supplier-invoice/upload` | FCA | Multipart. Stores the document, runs extraction, returns `{ fileId, extracted, orderedQuantityLitres }`. Records nothing and moves no balance |
+| POST | `/orders/:id/supplier-invoice` | FCA | `{ fileId, confirmed: {...} }`. Records the invoice and applies the balance movement in one transaction. `409` if already recorded or the order is cancelled/rejected; `400` on grade mismatch |
+| PUT | `/orders/:id/supplier-invoice` | FCA | Replace: supersedes the prior invoice and restates the movement — never applies a second |
+| GET | `/litre-balances?clientId=` | FCA | The owner's balances across grades |
+| GET | `/users/me/litre-balances` | CL | Includes movements, each traceable to its source (an order drawdown, a reconciliation, a correction) |
+| POST | `/litre-balances/:id/corrections` | FCA | `{ litres, reason }` — `reason` required, `400` without it |
+
+A litre balance's idempotency is two writes, not one: an upsert that only ensures the document
+exists, then a conditional `findOneAndUpdate` filtered on `reconciledOrderIds: { $ne: orderId }`
+(a `$addToSet`-style unique index does not catch a duplicate value pushed into one document's own
+array — only between separate documents).
+
+**Commission and cashback** — effective-dated records with no update path, so a rate change never
+rewrites history; the accrual it governs happens inside the existing order-approval transaction
+(commission accrues at approval, not at delivery — the order-approval transaction already exists).
+
+| Method | Path | Roles | Notes |
+|--------|------|-------|-------|
+| GET | `/billing/commission-terms/current` | FCA, SA | Read-only for FCA |
+| PUT | `/billing/commission-terms` | SA | Writes a new effective-dated record; never mutates |
+| GET | `/billing/cashback-programme/current` | FCA, SA | |
+| PUT | `/billing/cashback-programme` | SA | New effective-dated record |
+| GET | `/billing/balances/me` | FCA | Accrued commission, accrued cashback, ceiling, and the 90% warning state |
+| GET | `/billing/balances/:companyId` | SA | The operator's per-company drill-down onto the same figures |
+
+Deferred dealing is refused once accrued commission exceeds the ceiling, with a typed error code
+naming the ceiling; it resumes automatically once a **confirmed** payment brings it back below —
+no operator action required.
+
+**Platform account** — a settlement ledger between a fuel company and the platform. No payment
+provider is integrated: the platform displays details to pay elsewhere and records what the payer
+reports; it never initiates, takes or receives a payment.
+
+| Method | Path | Roles | Notes |
+|--------|------|-------|-------|
+| GET | `/platform-account/movements?companyId=` | FCA, SA | Cursor-paginated |
+| POST | `/platform-account/payments` | FCA | `{ amount, method, reference?, documentFileId? }`. Full or partial. `400` without evidence. Created as `RECORDED` — the balance does not move |
+| PATCH | `/platform-account/payments/:id/confirm` | SA | Conditional on `state: RECORDED` — the operator confirms by hand, never automatically |
+
+**Fuel exchange** — the one record type owned by two fuel companies at once, scoped by a third
+isolation mechanism (`party-set-scope.plugin.ts`) rather than the tenant or multi-party plugins,
+neither of which can express membership in an array. `SA` still bypasses every isolation plugin,
+including this one — the operator's own exchange screen renders correctly even when the mechanism
+is broken and must never be used as evidence that it works.
+
+| Method | Path | Roles | Notes |
+|--------|------|-------|-------|
+| GET | `/fuel-exchange/requests?direction=incoming\|outgoing\|all` | FCA, SA | `direction` is derived from `raisedByCompanyId` against the viewer, never stored per-viewer |
+| POST | `/fuel-exchange/requests` | FCA | `400` if the recipient does not sell the grade, or on invalid quantity/price |
+| GET | `/fuel-exchange/requests/:id` | FCA, SA | Includes the counterparty's contact details — only to the two parties |
+| PATCH | `/fuel-exchange/requests/:id/respond` | FCA | Recipient only. `{ accept: boolean }`. Conditional on `AWAITING_RESPONSE` → `409` |
+| PATCH | `/fuel-exchange/requests/:id/withdraw` | FCA | Raiser only. Same conditional |
+
+Accepting creates no order, delivery or invoice — a fuel exchange settles outside the platform.
+
+**Operator oversight** — almost entirely dashboard work over endpoints that already exist, plus the
+`SA`/`?companyId=` additions folded into the sections above: `GET /companies?type=FUEL`,
+`POST /companies`, `PATCH /companies/:id/status` were all pre-existing. Controls reserved to the
+operator (commission/cashback writes, ceiling, payment confirmation, company status) are **absent**,
+not merely disabled, from a `FUEL_COMPANY_ADMIN`'s render of any screen shared with the operator.
+
 ## Status codes summary
 
 - `400` validation failure (class-validator details array); a CREDIT order exceeding available credit; an invalid routing/region choice; a malformed pagination cursor
@@ -479,5 +585,24 @@ never back; acknowledging an already-acknowledged request is **409**.
 | `PHONE_IN_USE` | 409 | Target number belongs to another account |
 | `SMS_SEND_FAILED` | 502 | Provider rejected the send |
 | `LAST_STATION` | 409 | Cannot remove a client's only active station |
+
+All are named constants (Principle I), never inline strings.
+
+## Error codes introduced (spec 013)
+
+| Code | Status | Meaning |
+|---|---|---|
+| `LIMIT_REQUEST_ALREADY_RESOLVED` | 409 | A credit-limit request's resolution attempted after it already carries an outcome |
+| `COMMISSION_CEILING_EXCEEDED` | 409 | Deferred dealing refused — accrued commission exceeds the ceiling. Carries `ceiling`/`accrued`; never latched, resumes once a confirmed payment clears it |
+| `PAYMENT_EVIDENCE_REQUIRED` | 400 | A recorded payment carries neither `documentFileId` nor `reference` |
+| `PAYMENT_ALREADY_CONFIRMED` | 409 | The operator confirms a payment that is not `RECORDED` |
+| `SUPPLIER_INVOICE_ALREADY_RECORDED` | 409 | An order already carries a supplier invoice — `POST` refuses; `PUT` is the replace path |
+| `SUPPLIER_INVOICE_GRADE_MISMATCH` | 400 | A confirmed supplier-invoice fuel grade differs from the order's own |
+| `SUPPLIER_INVOICE_ORDER_NOT_ELIGIBLE` | 409 | Uploaded or recorded against a `CANCELLED`/`REJECTED` order |
+| `BALANCE_CORRECTION_REASON_REQUIRED` | 400 | A litre-balance correction submitted with no `reason` |
+| `LITRE_BALANCE_WOULD_GO_NEGATIVE` | — | Advisory, not a refusal — a supplier-invoice excess would take a balance below zero; the movement is still recorded |
+| `EXCHANGE_ALREADY_RESOLVED` | 409 | An exchange request's respond/withdraw attempted after it already reached a final outcome |
+| `EXCHANGE_GRADE_NOT_SOLD` | 400 | An exchange request named a grade the recipient company does not sell |
+| `EXCHANGE_PARTY_INVALID` | — | The party-set plugin's create-time guard: the acting company is absent from `partyCompanyIds`, or the array does not hold exactly the parties the domain defines |
 
 All are named constants (Principle I), never inline strings.

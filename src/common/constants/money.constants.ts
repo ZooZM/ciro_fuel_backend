@@ -11,6 +11,15 @@ export const CURRENCY_DECIMAL_PLACES = 2;
 export const DEFAULT_CURRENCY = 'SAR';
 
 /**
+ * Feature 013 FR-098 — every quantity this feature states MUST name its
+ * unit. The platform has represented volume by field naming alone until now
+ * (`quantityLiters`), never as an explicit string; this is the first
+ * response shape (litre balances, movements, exchange requests) that states
+ * a unit value directly rather than only encoding it in a field name.
+ */
+export const LITRE_UNIT = 'L';
+
+/**
  * Rounds to `CURRENCY_DECIMAL_PLACES`, half-up. Every `PriceBreakdown`
  * component MUST be rounded through this before being summed into the
  * total (research R2) — rounding the sum of unrounded components instead

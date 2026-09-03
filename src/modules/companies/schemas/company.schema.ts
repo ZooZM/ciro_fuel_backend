@@ -74,8 +74,27 @@ export class Company {
   @Prop({ type: [String], enum: RegionCode, default: [] })
   servedRegions!: RegionCode[];
 
+  // spec 013 (fuel company admin dashboard) FR-036, T086a — genuine platform addition,
+  // found during analysis, not a pattern-match: `servedRegions` above is TRANSPORT-only
+  // (assigned BY a fuel company TO its transporter). A FUEL-type company had no field of
+  // its own recording the regions it covers. Deliberately a separate field, never reusing
+  // `servedRegions` — the two mean different things for different company types and
+  // conflating them would let a fuel company's own coverage silently overwrite, or be
+  // overwritten by, one of its transporters' served regions.
+  @Prop({ type: [String], enum: RegionCode, default: [] })
+  coveredRegions!: RegionCode[];
+
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'File' })
   commercialRegisterFileId?: Types.ObjectId;
+
+  // spec 013 T135/FR-062a/FR-062b — the maximum accrued commission this company may owe
+  // before further deferred dealing is refused. Optional BY DESIGN: absent means the
+  // platform-wide default (config, not a document — `billing.defaultCommissionCeiling`)
+  // governs, so changing that default can never silently overwrite a ceiling the operator
+  // set explicitly for one company. Set only via `PUT /companies/:id/commission-ceiling`
+  // (SUPER_ADMIN only) — a company can never set or change its own.
+  @Prop({ min: 0 })
+  commissionCeiling?: number;
 
   @Prop({ type: String, required: true, enum: CompanyStatus, default: CompanyStatus.ACTIVE })
   status!: CompanyStatus;

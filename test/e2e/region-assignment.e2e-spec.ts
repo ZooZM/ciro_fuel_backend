@@ -188,4 +188,105 @@ describe('Transporter creation & region assignment (spec 004 US2)', () => {
       .send(payload)
       .expect(403);
   });
+
+  /**
+   * spec 013 (fuel company admin dashboard) FR-033, T086a — genuine platform addition:
+   * `create` above existed with no listing counterpart. Without this, an onboarded
+   * transporter could never be seen again through any endpoint.
+   */
+  describe('listing a fuel company\'s own transporters (FR-033)', () => {
+    it('lists exactly the transporters this fuel company created, and none of another\'s', async () => {
+      const created = await createTransporter(
+        fixtures.companyA.companyId,
+        fixtures.companyA.admin.token,
+        'Region Test Transporter List A',
+      );
+
+      const asOwner = await request(app.getHttpServer())
+        .get(`/api/v1/companies/${fixtures.companyA.companyId}/transporters`)
+        .set('Authorization', `Bearer ${fixtures.companyA.admin.token}`)
+        .expect(200);
+      const ids = (asOwner.body as { _id: string }[]).map((c) => c._id);
+      expect(ids).toContain(created.company._id);
+
+      // Company B's own listing must never contain company A's transporter.
+      const asOtherCompany = await request(app.getHttpServer())
+        .get(`/api/v1/companies/${fixtures.companyB.companyId}/transporters`)
+        .set('Authorization', `Bearer ${fixtures.companyB.admin.token}`)
+        .expect(200);
+      const otherIds = (asOtherCompany.body as { _id: string }[]).map((c) => c._id);
+      expect(otherIds).not.toContain(created.company._id);
+    });
+
+    it("refuses Fuel Company B listing Fuel Company A's transporters (404, never 403)", async () => {
+      await request(app.getHttpServer())
+        .get(`/api/v1/companies/${fixtures.companyA.companyId}/transporters`)
+        .set('Authorization', `Bearer ${fixtures.companyB.admin.token}`)
+        .expect(404);
+    });
+  });
+
+  /**
+   * spec 013 FR-035/FR-036, T086a/T086b — the FUEL-type counterpart to servedRegions
+   * above: the regions a fuel company covers itself, distinct from the regions it
+   * assigns to a transporter.
+   */
+  describe("a fuel company's own covered regions (FR-036)", () => {
+    it('starts empty, is set by the owning admin, and reads back the same value', async () => {
+      const initial = await request(app.getHttpServer())
+        .get(`/api/v1/companies/${fixtures.companyA.companyId}/covered-regions`)
+        .set('Authorization', `Bearer ${fixtures.companyA.admin.token}`)
+        .expect(200);
+      expect(initial.body).toEqual([]);
+
+      const set = await request(app.getHttpServer())
+        .put(`/api/v1/companies/${fixtures.companyA.companyId}/covered-regions`)
+        .set('Authorization', `Bearer ${fixtures.companyA.admin.token}`)
+        .send({ regionCodes: ['RIYADH', 'MAKKAH'] })
+        .expect(200);
+      expect(set.body.sort()).toEqual(['MAKKAH', 'RIYADH']);
+
+      const readBack = await request(app.getHttpServer())
+        .get(`/api/v1/companies/${fixtures.companyA.companyId}/covered-regions`)
+        .set('Authorization', `Bearer ${fixtures.companyA.admin.token}`)
+        .expect(200);
+      expect(readBack.body.sort()).toEqual(['MAKKAH', 'RIYADH']);
+    });
+
+    it("never touches the fuel company's own servedRegions field (they are distinct)", async () => {
+      await request(app.getHttpServer())
+        .put(`/api/v1/companies/${fixtures.companyA.companyId}/covered-regions`)
+        .set('Authorization', `Bearer ${fixtures.companyA.admin.token}`)
+        .send({ regionCodes: ['TABUK'] })
+        .expect(200);
+
+      const asOwner = await request(app.getHttpServer())
+        .get(`/api/v1/companies/${fixtures.companyA.companyId}`)
+        .set('Authorization', `Bearer ${fixtures.companyA.admin.token}`)
+        .expect(200);
+      // A fuel company's own servedRegions is meaningless/absent — this asserts the two
+      // fields do not alias each other, not a specific value for servedRegions.
+      expect(asOwner.body.coveredRegions.sort()).toEqual(['TABUK']);
+    });
+
+    it("refuses Fuel Company B reading or writing Fuel Company A's covered regions (404)", async () => {
+      await request(app.getHttpServer())
+        .get(`/api/v1/companies/${fixtures.companyA.companyId}/covered-regions`)
+        .set('Authorization', `Bearer ${fixtures.companyB.admin.token}`)
+        .expect(404);
+      await request(app.getHttpServer())
+        .put(`/api/v1/companies/${fixtures.companyA.companyId}/covered-regions`)
+        .set('Authorization', `Bearer ${fixtures.companyB.admin.token}`)
+        .send({ regionCodes: ['JAZAN'] })
+        .expect(404);
+    });
+
+    it('rejects an unknown region code', async () => {
+      await request(app.getHttpServer())
+        .put(`/api/v1/companies/${fixtures.companyA.companyId}/covered-regions`)
+        .set('Authorization', `Bearer ${fixtures.companyA.admin.token}`)
+        .send({ regionCodes: ['ATLANTIS'] })
+        .expect(400);
+    });
+  });
 });

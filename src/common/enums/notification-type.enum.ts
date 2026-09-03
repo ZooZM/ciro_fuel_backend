@@ -25,4 +25,13 @@ export enum NotificationType {
   // the response window (FR-009) — the driver was asked and said nothing,
   // which is the case most likely to mean they cannot answer.
   ORDER_STOP_UNRESOLVED = 'ORDER_STOP_UNRESOLVED',
+
+  // spec 013 (fuel company admin dashboard) FR-030 — to the CLIENT (station owner):
+  // the outcome of their credit-limit request. Payload carries `accepted` and
+  // `grantedAmount` (present only when accepted). One of the two client-facing
+  // additions this feature's spec Assumptions name explicitly — the mobile app is
+  // otherwise unchanged; a build that has not yet added a case for this value
+  // degrades to the existing "unknown" fallback, the same graceful-degradation
+  // path every other unrecognised type already has.
+  CREDIT_LIMIT_REQUEST_RESOLVED = 'CREDIT_LIMIT_REQUEST_RESOLVED',
 }

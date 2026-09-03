@@ -21,6 +21,11 @@ import { WarehousesModule } from '../warehouses/warehouses.module';
 import { VehicleVerificationService } from './services/vehicle-verification.service';
 import { StopDetectionModule } from '../stop-detection/stop-detection.module';
 import { AssignmentEscalationModule } from '../assignment-escalation/assignment-escalation.module';
+import { FilesModule } from '../files/files.module';
+import { LitreBalancesModule } from '../litre-balances/litre-balances.module';
+import { SupplierInvoicesService } from './services/supplier-invoices.service';
+import { SupplierInvoiceExtractionPort } from './services/supplier-invoice-extraction.port';
+import { NullSupplierInvoiceExtractor } from './services/null-supplier-invoice-extractor';
 
 @Module({
   imports: [
@@ -47,9 +52,20 @@ import { AssignmentEscalationModule } from '../assignment-escalation/assignment-
     // StopDetectionService, which owns the one-open-stop invariant the
     // sweep also enforces — the two paths must share it, not restate it.
     StopDetectionModule,
+    FilesModule,
+    LitreBalancesModule,
   ],
   controllers: [OrdersController],
-  providers: [OrdersService, EtaService, RouteService, PricingService, VehicleVerificationService],
+  providers: [
+    OrdersService,
+    EtaService,
+    RouteService,
+    PricingService,
+    VehicleVerificationService,
+    SupplierInvoicesService,
+    // T179/R8 — the null extractor is the default and, today, only binding for the port.
+    { provide: SupplierInvoiceExtractionPort, useClass: NullSupplierInvoiceExtractor },
+  ],
   exports: [OrdersService, PricingService],
 })
 export class OrdersModule {}

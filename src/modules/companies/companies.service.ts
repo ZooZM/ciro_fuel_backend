@@ -138,6 +138,27 @@ export class CompaniesService {
     return this.companyModel.find(id ? { _id: id } : {}).exec();
   }
 
+  /**
+   * spec 013 Phase 15 (US12), a genuine platform capability gap found while wiring
+   * `NewFuelRequestForm.tsx`: `findAll` deliberately narrows a `FUEL_COMPANY_ADMIN` to
+   * their OWN company (FR-004a's boundary, `findAll`'s own doc comment) — correct for
+   * `GET /companies`, but it leaves no way for a fuel company to discover WHO it could
+   * raise a fuel-exchange request to. This is a separate, narrow read: every other
+   * ACTIVE fuel company, never the caller's own, and never anything beyond name/id (no
+   * pricing, no contact info — those are FR-086b's concern, disclosed only once a request
+   * already exists between the two parties).
+   */
+  findExchangePartners(excludingCompanyId: string): Promise<CompanyDocument[]> {
+    return this.companyModel
+      .find({
+        type: CompanyType.FUEL,
+        status: CompanyStatus.ACTIVE,
+        _id: { $ne: excludingCompanyId },
+      })
+      .select('name')
+      .exec();
+  }
+
   async setStatus(id: string, status: CompanyStatus): Promise<CompanyDocument> {
     const company = await this.companyModel.findByIdAndUpdate(id, { status }, { new: true }).exec();
     if (!company) {
@@ -192,6 +213,20 @@ export class CompaniesService {
   }
 
   /**
+   * spec 013 (fuel company admin dashboard) FR-033, T086a — genuine platform addition,
+   * found during analysis: `createTransportCompany` (create) existed with no listing
+   * counterpart at all. A fuel company admin could onboard a transporter and never see it
+   * again through any endpoint. `Company` carries no isolation marker (it is the tenant
+   * root), so this method is the enforcement point, mirroring `assertCompanyAccess`'s own
+   * ownership check rather than trusting a caller-supplied filter.
+   */
+  findTransporters(fuelCompanyId: string): Promise<CompanyDocument[]> {
+    return this.companyModel
+      .find({ type: CompanyType.TRANSPORT, parentFuelCompanyId: new Types.ObjectId(fuelCompanyId) })
+      .exec();
+  }
+
+  /**
    * Replaces (never merges) a Transportation Company's served regions
    * (spec 004 FR-014). `fuelCompanyId` is whoever is *acting* — this throws
    * if `transportCompanyId` doesn't genuinely belong to them, the same
@@ -217,5 +252,32 @@ export class CompaniesService {
     }
     transporter.servedRegions = regionCodes;
     return transporter.save();
+  }
+
+  /**
+   * spec 013 FR-036, T086a — the FUEL-type counterpart to `assignRegions`. Access is
+   * enforced by the controller's `assertCompanyAccess` (own company only), so this method
+   * trusts `id` the way `setFuelPrices`/`setPricingConfig` already do.
+   */
+  async setCoveredRegions(id: string, regionCodes: RegionCode[]): Promise<CompanyDocument> {
+    const company = await this.companyModel
+      .findByIdAndUpdate(id, { coveredRegions: regionCodes }, { new: true })
+      .exec();
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+    return company;
+  }
+
+  // spec 013 T140/FR-062a — SUPER_ADMIN only (enforced by the controller's `@Roles`, not
+  // `assertCompanyAccess` — a company must never set or change its own).
+  async setCommissionCeiling(id: string, commissionCeiling: number): Promise<CompanyDocument> {
+    const company = await this.companyModel
+      .findByIdAndUpdate(id, { commissionCeiling }, { new: true })
+      .exec();
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+    return company;
   }
 }

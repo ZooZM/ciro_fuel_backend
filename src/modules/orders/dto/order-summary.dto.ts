@@ -17,3 +17,21 @@ export interface OrderSummaryDto {
   driversOnDuty: number;
   outstandingSettlements: OutstandingSettlementsSummary;
 }
+
+/**
+ * spec 013 (fuel company admin dashboard) T111/FR-046 — a separate shape from
+ * `OrderSummaryDto` above rather than reusing it with optional fields: `driversOnDuty`
+ * (always zero for a FUEL_COMPANY_ADMIN — drivers belong to transport companies) and
+ * `awaitingAssignment` (ROUTED_TO_TRANSPORT — a transporter's own decision point, not a
+ * fuel company's) are meaningless for this role, and `pendingApproval` /
+ * `stationOwnersCount` / `stationsCount` / `creditOutstanding` have no equivalent for a
+ * TRANSPORT_COMPANY_ADMIN. Two roles, two genuinely different summaries.
+ */
+export interface FuelCompanySummaryDto {
+  pendingApproval: number;
+  inProgress: number;
+  completedInPeriod: number;
+  stationOwnersCount: number;
+  stationsCount: number;
+  creditOutstanding: OutstandingSettlementsSummary;
+}
