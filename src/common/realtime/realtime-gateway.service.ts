@@ -44,4 +44,26 @@ export class RealtimeGatewayService {
   emitToUser(userId: string, event: string, payload: unknown): void {
     this.server?.to(`user:${userId}`).emit(event, payload);
   }
+
+  /**
+   * feature 013 US2 (realtime-contract §3): drop every socket in a user's
+   * room — used when `AuthService.login` displaces a prior session, so a
+   * displaced device's connection ends rather than being left open, retrying
+   * and holding a socket slot with every frame refused (FR-017).
+   *
+   * `disconnectSockets` is a room operation, so it reaches sockets on any
+   * instance through the Redis adapter — the same mechanism `emitToUser`
+   * relies on. It is NOT the guarantee: a disconnect can be lost, and the
+   * adapter is a dependency spec 012 Q7 lets degrade — `TrackingGateway`'s
+   * per-frame `sgen` check is what actually stops a displaced device
+   * writing. So a failure here is logged and swallowed: it must never break
+   * the sign-in that triggered it.
+   */
+  disconnectUser(userId: string): void {
+    try {
+      this.server?.in(`user:${userId}`).disconnectSockets(true);
+    } catch (err) {
+      this.logger.error({ err, userId }, 'Failed to disconnect displaced sockets — degraded');
+    }
+  }
 }

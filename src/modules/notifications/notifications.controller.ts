@@ -17,6 +17,20 @@ export class NotificationsController {
     return this.notificationsService.findForUser(user.userId, unread === 'true', cursor);
   }
 
+  /**
+   * feature 013 FR-025 (contracts/rest-api-delta.md §2): mark every
+   * notification read for the caller. The recipient is taken from the token,
+   * never the request. Returns `{ updated }` — the count actually
+   * transitioned, so a second call is `{ updated: 0 }`, not an error.
+   *
+   * Declared BEFORE `:id/read` so the literal path segment is not captured
+   * by the `:id` param.
+   */
+  @Patch('read-all')
+  markAllRead(@CurrentUser() user: AuthenticatedUser) {
+    return this.notificationsService.markAllRead(user.userId);
+  }
+
   @Patch(':id/read')
   markRead(@Param('id', ObjectIdPipe) id: string, @CurrentUser() user: AuthenticatedUser) {
     return this.notificationsService.markRead(id, user.userId);

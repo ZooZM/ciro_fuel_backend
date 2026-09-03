@@ -196,6 +196,39 @@ describe('Horizontal readiness — two instances (spec 012 US9)', () => {
         socket.close();
       }
     }, 90_000);
+
+    it('feature 013 T030: a displacement disconnect issued on instance B ends a socket connected to instance A', async () => {
+      // The tidy-up half of US2 (realtime-contract §3): `disconnectUser` is a
+      // room operation, so — like `emitToUser` above — it only reaches a
+      // socket on another instance through the Redis adapter. This is exactly
+      // the capability spec 012 found silently dead.
+      const socket: Socket = io(`${ctx.urlA}/tracking`, {
+        transports: ['websocket'],
+        auth: { token: driverToken },
+        forceNew: true,
+        reconnection: false,
+      });
+
+      try {
+        await new Promise<void>((resolve, reject) => {
+          socket.on('connect', () => resolve());
+          socket.on('connect_error', reject);
+          setTimeout(() => reject(new Error('connect timed out')), 15_000);
+        });
+
+        const disconnected = new Promise<string>((resolve, reject) => {
+          socket.on('disconnect', (reason: string) => resolve(reason));
+          setTimeout(() => reject(new Error('disconnect never crossed instances')), 20_000);
+        });
+
+        ctx.b.get(RealtimeGatewayService).disconnectUser(driverId);
+
+        await expect(disconnected).resolves.toBeDefined();
+        expect(socket.connected).toBe(false);
+      } finally {
+        socket.close();
+      }
+    }, 90_000);
   });
 
   describe('both instances serve identically (FR-069)', () => {

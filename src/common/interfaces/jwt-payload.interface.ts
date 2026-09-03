@@ -20,4 +20,13 @@ export interface AuthenticatedUser {
    * Fuel Company that owns it, resolved per-request, never persisted in the
    * JWT itself (see `UsersService.validateActiveSessionWithScoping`). */
   parentFuelCompanyId?: string;
+  /** feature 013 US2 (research R2): the `sessionGeneration` this connection
+   * claimed **at handshake**, stamped from the verified token and never
+   * re-read from the account. Absent normalises to `0` so a token minted
+   * before spec 006 stays valid — dropping that would make every legacy
+   * token a permanent mismatch, and the failure would look exactly like the
+   * enforcement working. Only the socket path stamps this today
+   * (`authenticateSocket`); the REST path re-checks `sgen` on every request
+   * inside `validateActiveSessionWithScoping` already. */
+  sgen?: number;
 }

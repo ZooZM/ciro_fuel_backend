@@ -6,4 +6,13 @@
 export enum StopOrigin {
   DETECTED = 'DETECTED',
   DECLARED = 'DECLARED',
+  // feature 013 US5a: the driver reported they cannot reach the destination
+  // and is asking for help. Unlike DECLARED — which is written already
+  // resolved and suppresses detection for a driver-stated duration — a
+  // BLOCKED stop is written UNRESOLVED, carries NO `suppressedUntil` (a
+  // request for help must not silence detection, FR-039b), stamps
+  // `escalatedAt` at creation, and notifies the transporter in the same
+  // operation (FR-039a). It cannot be filed as a declaration: that would
+  // tell nobody and switch detection off (research R5).
+  BLOCKED = 'BLOCKED',
 }

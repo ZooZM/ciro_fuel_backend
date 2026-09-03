@@ -162,13 +162,31 @@ export class TrackingGateway implements OnGatewayConnection, OnApplicationShutdo
         return { ok: false, error: 'FORBIDDEN_ROLE' };
       }
 
-      // Presence updates regardless of whether the point itself gets accepted.
-      await this.presenceService.touch(client.data.user.userId);
-
+      // feature 013 US2 (research R2): load the driver FIRST — this
+      // `findById` already ran on every frame, and the document it returns
+      // carries `sessionGeneration`, so the displacement check below is ZERO
+      // added I/O. It must run BEFORE `presenceService.touch()`: `touch`
+      // writes `isOnline: true, lastSeenAt: now`, and a displaced device
+      // touching presence keeps a dead handset marked online and
+      // dispatchable — the exact opposite of what enforcing displacement is
+      // for.
       const driver = await this.userModel.findById(client.data.user.userId).exec();
       if (!driver) {
         return { ok: false, error: 'FORBIDDEN_ROLE' };
       }
+
+      // The session this socket claimed at handshake against what the
+      // account holds now. A sign-in elsewhere (or a reset/deactivation)
+      // bumped `sessionGeneration`; Socket.io will not re-validate a frame
+      // already in flight, so this is the only thing standing between a
+      // displaced device and the authoritative position of a truck. Refused
+      // BEFORE presence, gating, and any write (realtime-contract §1).
+      if ((client.data.user.sgen ?? 0) !== (driver.sessionGeneration ?? 0)) {
+        return { ok: false, error: 'SESSION_REVOKED' };
+      }
+
+      // Presence updates regardless of whether the point itself gets accepted.
+      await this.presenceService.touch(client.data.user.userId);
 
       // A driver's position is recorded whether or not they are carrying an
       // order. It used to be rejected with NO_ACTIVE_ORDER, which deadlocked

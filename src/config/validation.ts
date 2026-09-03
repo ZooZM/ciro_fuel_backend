@@ -35,13 +35,18 @@ export const validationSchema = Joi.object({
   // must be impossible to select in production, or the first production
   // phone-verification code silently never gets sent.
   SMS_PROVIDER: Joi.string()
-    .valid('none', 'unifonic', 'twilio')
+    .valid('none', 'taqnyat', 'unifonic', 'twilio')
     .default('none')
     .when('NODE_ENV', {
       is: 'production',
       then: Joi.string().invalid('none').required(),
     }),
+  // The provider's bearer token. Kept under the existing SMS_API_KEY name
+  // rather than a provider-specific one: it is already in the secrets
+  // manifest, so a new name would mean a new secret, a new IAM binding and a
+  // manifest change to express the same thing.
   SMS_API_KEY: Joi.string().allow('').default(''),
+  SMS_ENDPOINT_URL: Joi.string().uri().default('https://api.taqnyat.sa/v1/messages'),
   SMS_SENDER_ID: Joi.string().allow('').default(''),
   // spec 006 (driver auth & session) — defaults per spec.md Assumptions.
   PASSWORD_RESET_EXPIRY_MINUTES: Joi.number().default(5),

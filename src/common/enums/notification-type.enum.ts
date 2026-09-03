@@ -24,7 +24,9 @@ export enum NotificationType {
   // To the TRANSPORT COMPANY's admins: a detected stop went unanswered past
   // the response window (FR-009) — the driver was asked and said nothing,
   // which is the case most likely to mean they cannot answer.
+  ORDER_DRIVER_BLOCKED = 'ORDER_DRIVER_BLOCKED',
   ORDER_STOP_UNRESOLVED = 'ORDER_STOP_UNRESOLVED',
+
 
   // spec 013 (fuel company admin dashboard) FR-030 — to the CLIENT (station owner):
   // the outcome of their credit-limit request. Payload carries `accepted` and

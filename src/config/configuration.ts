@@ -61,6 +61,7 @@ export interface AppConfig {
     provider: string;
     apiKey: string;
     senderId: string;
+    endpointUrl: string;
   };
   // spec 006 (driver auth & session) — see spec.md Assumptions for why
   // these four values are the concrete defaults chosen there.
@@ -228,6 +229,7 @@ export default (): AppConfig => ({
     provider: process.env.SMS_PROVIDER ?? 'none',
     apiKey: process.env.SMS_API_KEY ?? '',
     senderId: process.env.SMS_SENDER_ID ?? '',
+    endpointUrl: process.env.SMS_ENDPOINT_URL ?? 'https://api.taqnyat.sa/v1/messages',
   },
   passwordReset: {
     expiryMinutes: parseInt(process.env.PASSWORD_RESET_EXPIRY_MINUTES ?? '5', 10),

@@ -63,6 +63,19 @@ export class NotificationsService {
    * never a stored counter that could drift from the notifications
    * themselves (T087).
    */
+  /**
+   * feature 013 US3: `runUnscoped`, keyed strictly on `recipientUserId` — the
+   * same discipline `notify` uses for the write. A notification's `companyId`
+   * is the *order's* fuel company (every `notify` call site), which for a
+   * DRIVER recipient is a different tenant from the driver's own `companyId`
+   * (their transport company). With the ambient tenant filter on, a driver is
+   * scoped out of every notification addressed to them — `ORDER_ASSIGNED` and
+   * `DRIVER_STOP_DETECTED` alike — so the driver's list would render
+   * permanently empty. `recipientUserId` comes from the authenticated token
+   * and is the real per-user boundary; for a CLIENT it is
+   * equivalent-or-tighter than the `companyId` filter, so this changes
+   * nothing for that persona (FR-042).
+   */
   async findForUser(
     recipientUserId: string,
     unreadOnly: boolean,
@@ -72,20 +85,55 @@ export class NotificationsService {
     if (unreadOnly) {
       filter.readAt = null;
     }
-    const [page, unreadCount] = await Promise.all([
-      paginate(this.notificationModel, filter, NOTIFICATION_SORT_KEYS, cursor),
-      this.notificationModel.countDocuments({ recipientUserId, readAt: null }).exec(),
-    ]);
-    return { ...page, unreadCount };
+    return this.tenantContext.runUnscoped(async () => {
+      const [page, unreadCount] = await Promise.all([
+        paginate(this.notificationModel, filter, NOTIFICATION_SORT_KEYS, cursor),
+        this.notificationModel.countDocuments({ recipientUserId, readAt: null }).exec(),
+      ]);
+      return { ...page, unreadCount };
+    });
   }
 
   async markRead(id: string, recipientUserId: string): Promise<NotificationDocument> {
-    const notification = await this.notificationModel
-      .findOneAndUpdate({ _id: id, recipientUserId }, { readAt: new Date() }, { new: true })
-      .exec();
+    // Same reasoning as `findForUser` — `recipientUserId` (from the token) is
+    // the boundary, so a driver can mark their own fuel-company-scoped
+    // notification read.
+    const notification = await this.tenantContext.runUnscoped(() =>
+      this.notificationModel
+        .findOneAndUpdate({ _id: id, recipientUserId }, { readAt: new Date() }, { new: true })
+        .exec(),
+    );
     if (!notification) {
       throw new NotFoundException('Notification not found');
     }
     return notification;
+  }
+
+  /**
+   * feature 013 FR-025/FR-026: marks every unread notification read for the
+   * calling user, returning the count actually transitioned.
+   *
+   * One conditional `updateMany` — idempotent by construction, since the
+   * update falsifies its own filter, so a second call returns `{ updated: 0 }`
+   * rather than an error. No transaction: there is no second document whose
+   * consistency depends on this. The recipient is the authenticated
+   * principal, never a parameter — a body-supplied recipient would be a
+   * cross-tenant write dressed as a convenience.
+   */
+  async markAllRead(recipientUserId: string): Promise<{ updated: number }> {
+    // `runUnscoped`, keyed strictly on `recipientUserId` — the same discipline
+    // `notify` uses for the write. A notification's `companyId` is the
+    // *order's* fuel company (every `notify` call site), which for a DRIVER
+    // recipient is a different tenant from the driver's own `companyId` (their
+    // transport company). With the ambient tenant filter on, a driver's
+    // `updateMany` would match none of their own notifications.
+    // `recipientUserId` comes from the authenticated token and is the real
+    // per-user boundary here.
+    const result = await this.tenantContext.runUnscoped(() =>
+      this.notificationModel
+        .updateMany({ recipientUserId, readAt: null }, { $set: { readAt: new Date() } })
+        .exec(),
+    );
+    return { updated: result.modifiedCount };
   }
 }

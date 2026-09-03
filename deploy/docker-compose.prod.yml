@@ -94,9 +94,9 @@ services:
       HEALTH_TIMEOUT_MS: 1000
       INSTANCE_ID: ciro-fuel-prod-vm
 
-      # ⚠ 'none' is rejected in production — needs a real provider.
-      SMS_PROVIDER: unifonic
-      SMS_SENDER_ID: CIRO
+      SMS_PROVIDER: taqnyat
+      SMS_SENDER_ID: ciro
+      SMS_ENDPOINT_URL: https://api.taqnyat.sa/v1/messages
 
       JWT_EXPIRES_IN: 15m
       JWT_REFRESH_EXPIRES_IN: 7d
