@@ -1,5 +1,102 @@
 <!-- SPECKIT START -->
-Active feature — read this plan first: `specs/012-production-hardening/plan.md`
+Active feature — read this plan first: `specs/015-dashboard-auth-taqnyat-sms/plan.md`
+(administrators sign in to the web dashboard with their mobile number and a code sent by SMS).
+**Implemented — code complete across both repositories; full-suite / live-environment verification
+outstanding (see below).** Supporting artifacts: `spec.md` (7 stories, 74 FRs, 20 SCs, 5
+clarifications), `research.md` (12 decisions — R1, R3, R5, R6 and R9 each overturn something the
+spec or the existing code assumed), `data-model.md`, `quickstart.md`,
+`contracts/rest-api-delta.md`, `contracts/dashboard-integration.md`, `contracts/config-contract.md`,
+`tasks.md` (125 tasks). **Spans two repositories**: this backend and the dashboard at
+`E:\zeyad\web_dashboard_ciro_fuel` (feature branch `015-dashboard-auth-taqnyat-sms` in both).
+
+**Implementation status**: all 7 user stories built.
+· **Backend** — `npm run build` clean; full `tsc --noEmit` clean including all new specs;
+`npm run test` (unit) **250/253** — the 3 failures are `assignment-escalation-queue.service.spec.ts`,
+which requires a live Redis that the build machine lacks (Docker Desktop unresponsive), not a
+regression. New unit suites: `admin-session-primitives`, `challenge.service`, `sms-config-validation`,
+`taqnyat-sms-sender`. New e2e suites written (not executed here — no Redis / `MongoMemoryReplSet`):
+`admin-multi-session`, `mobile-session-unchanged`, `login-code`, `login-abuse`,
+`admin-password-recovery`. `test/utils/fixtures.ts` now gives every fixture admin a `uniquePhone()`
+and exposes `.phone` on each actor (the extended partial unique phone index covers admin roles).
+· **Dashboard** — `tsc -b --force` reports only the same ~30 pre-existing `TS6133`/`TS6192`
+unused-import errors feature 009/011 disclosed; `vitest run` **92 passing / 19 files** (up from 76),
+same 2 pre-existing suites that fail to *load* (`accessibility.test.tsx`, `orders.mutations.test.tsx`).
+New Vitest: `proof-of-work`, `token-store`, `login-signin`, plus additions to `bootstrap-session`
+and `api-client.refresh`.
+· **`npm run lint:check` is unusable on this Windows checkout** — `core.autocrlf=true` with no
+`.gitattributes` makes eslint-plugin-prettier flag `␍` on every line of every file repo-wide
+(~38.9k errors), a pre-existing environment condition; git still normalises the index to LF so
+diffs and commits are clean.
+
+**Not verified — needs an environment this session did not have**: the full `npm run test:e2e` run
+(no Redis, no `MongoMemoryReplSet`); the Slice 0 **`flutter test` "mobile unchanged" gate** (T032 —
+the mobile repo is not present on this machine; the backend diff touches no mobile path, but the gate
+MUST run before deploy per research R12); `T108` (mirror `SESSION_LIMIT_EXCEEDED` into the Flutter
+session-cause enum — same reason); quickstart Parts 1–4 walkthroughs; and Part 4 steps 1/11, which
+need a real Taqnyat account and a handset. `scripts/normalize-admin-phones.ts` (T041) must be run
+against **each** target environment **before** the schema change deploys there — `autoIndex` is on,
+so the extended phone index builds at boot and fails while any admin phone is still non-E.164.
+
+**Corrections found while implementing** — cases where following the plan verbatim would have
+shipped something plausible and wrong:
+· **`LoginCodeService.requestCode`'s step order was wrong as first written.** Calling the request-rate
+limiter *before* the challenge check makes the challenge branch unreachable — once over the limit the
+limiter throws `429` forever and the code never reaches `challengeRequired`. Reordered: block check →
+challenge check (a solved PoW **bypasses** the rate limit, which is the point) → rate limit. The
+limiter increments a separate `login-otp:rlhits:{phone}` counter on each `429`, and `challengeAfter`
+reads *that*, so quickstart 3.5's "`202`×3, then `429`, then `CHALLENGE_REQUIRED`" holds.
+· **`SessionAuditService._write` must OMIT `sid` when absent, not write `sid: undefined`.** The
+existing `session-audit.service.spec.ts` asserts the exact key set of a written row; a spread guard
+(`...(subject.sid ? { sid } : {})`) keeps DRIVER/CLIENT and account-level rows byte-identical.
+· **`revokeAndSetPassword` alone did not make admin SMS recovery work** — `PasswordResetService`
+resolved the phone through `findByPhoneForAuth`, which is CLIENT/DRIVER-scoped *on purpose* (T053
+forbids changing it). Added a fallback to `findSingleActiveAdminByPhone` inside the existing
+`runUnscoped` block, after the rate limit has already run keyed on the submitted string.
+· **`AuthController.logout` now takes the whole `AuthenticatedUser`**, not `user.userId` — an admin
+logout must name its own `sid`, and `sid` is stamped onto `AuthenticatedUser` from the verified token
+by `JwtStrategy.validate` (the one handler permitted to read it).
+· **The extended partial unique phone index now covers all five roles** (was CLIENT/DRIVER). Every
+e2e fixture that hard-coded `+966500000001` for an admin would collide; `fixtures.ts` was the obvious
+one and is fixed, but a full e2e run is needed to shake out any per-suite collisions this session
+could not execute.
+· **Dashboard `ApiError` / `toApiError` gained `retryAfterSeconds` and `challenge`** — the shared
+error normaliser dropped every field beyond `error`/`message`/`cause`, so `LOGIN_RATE_LIMITED`'s wait
+and `CHALLENGE_REQUIRED`'s `{seed, difficultyBits}` were unreachable by the screens.
+
+**Deferred / scope calls**: the two rewired sign-in screens keep their existing hard-coded Arabic
+copy (matching their pre-feature state) — the new strings are added to `ar.json`/`en.json` (key
+parity preserved for `i18n-rtl.test.tsx`) but the screens are not fully retrofitted to `t()`.
+Playwright journeys (T109/T110) are written under `<dashboard>/tests/e2e/` but not executed here.
+
+Three gaps, of three different kinds. **Sending an SMS is configuration, not a build** —
+`TaqnyatSmsSender` already exists and already handles the provider's surprising `201`-with-a-rejected-
+recipient; the platform is merely pointed at the development no-op, and `SMS_API_KEY`/`SMS_SENDER_ID`
+lack the `.when(SMS_PROVIDER=taqnyat)` conditional, so a production deployment can start "configured
+for Taqnyat" with a blank token. That fix **must** include `.invalid('')` — Joi keeps the base
+schema's `.allow('')` when merging a conditional, and this exact defect already shipped twice here
+(`CORS_ALLOWED_ORIGINS`, `GCS_BUCKET`). **Code sign-in is a new unauthenticated credential endpoint**,
+hardened past the existing recovery flow with a per-number block across codes and a self-hosted
+proof-of-work challenge. **Concurrent admin sessions break the session model** — `sessionGeneration`
+is one integer per account and is the sole mechanism behind driver displacement, sign-out,
+password-reset invalidation, deactivation and company suspension; it cannot express "three sessions,
+close this one, evict the oldest." That is the real work, and its correctness condition is a
+*negative* one (DRIVER/CLIENT bit-for-bit unchanged), so **Slice 0 lands it alone**.
+
+Findings that decided more of the plan than the spec did: **administrator phone numbers are neither
+unique nor real** — the partial unique index deliberately excludes admin roles, `seed-super-admin.ts`
+writes the literal `'N/A'`, and `findByPhoneForAuth` is scoped away from admin roles *on purpose*
+with a comment saying that is what stops the placeholder resolving to a login; the platform has an
+explicit, commented design that admin phones are not login identifiers, and this feature reverses it
+· **the dashboard persists the wrong token** — access token to `localStorage`, refresh token
+memory-only, exactly backwards, so a reload after access expiry throws the administrator back to
+sign-in, now at the cost of an SMS · **no `session:revoked` push on admin eviction**, because the
+room is `user:{userId}` and both that emit and `disconnectUser` would sign the administrator out of
+the very devices this feature exists to keep working · **the abuse counters fail closed**, knowingly
+contradicting spec 012's Q7 throttler decision, because the blast radius is two endpoints and failing
+open leaves a six-digit code unguarded · **four dashboard files assert that this platform has no OTP
+login** (features 013/014 wrote that conclusion into comments and helper copy); all four become false.
+
+Previously implemented feature: `specs/012-production-hardening/plan.md`
 (close the operational gaps that decide whether a production incident is a five-minute fix or a
 silent failure, **without changing one byte of platform behaviour** — a liveness signal, graceful
 shutdown, production CORS, proxy-aware rate limiting, structured logs, durable document storage,

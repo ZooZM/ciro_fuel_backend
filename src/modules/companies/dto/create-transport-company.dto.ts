@@ -1,4 +1,5 @@
-import { IsEmail, IsString, MinLength } from 'class-validator';
+import { IsEmail, IsString, Matches, MinLength } from 'class-validator';
+import { E164_PATTERN } from '../../../common/constants/phone';
 
 /**
  * Fuel-Company-admin-only (spec 004 US2) — creates a Transportation Company
@@ -24,7 +25,9 @@ export class CreateTransportCompanyDto {
   @MinLength(2)
   adminFullName!: string;
 
-  @IsString()
+  // spec 015 R5 — an administrator's phone is now a login identifier; it must
+  // be a real E.164 number.
+  @Matches(E164_PATTERN, { message: 'adminPhone must be a valid E.164 number' })
   adminPhone!: string;
 
   @IsString()

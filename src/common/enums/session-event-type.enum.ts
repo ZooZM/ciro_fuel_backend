@@ -16,4 +16,11 @@ export enum SessionEventType {
   // since there is no account for the row to belong to).
   RECOVERY_REQUESTED = 'RECOVERY_REQUESTED',
   RECOVERY_VERIFY_FAILED = 'RECOVERY_VERIFY_FAILED',
+  // spec 015 (dashboard auth) FR-031 — mirrors the RECOVERY_* pair for the
+  // passwordless code sign-in flow. Written only when the number resolves to
+  // exactly one active administrator (an unregistered/driver/client number
+  // gets the identical neutral response and no row). The code itself is
+  // NEVER recorded on these rows.
+  LOGIN_CODE_REQUESTED = 'LOGIN_CODE_REQUESTED',
+  LOGIN_CODE_VERIFY_FAILED = 'LOGIN_CODE_VERIFY_FAILED',
 }

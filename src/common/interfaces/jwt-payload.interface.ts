@@ -10,6 +10,17 @@ export interface JwtPayload {
    * Carried on both the access and the refresh token; a revoked session
    * must not be renewable by its own refresh token. */
   sgen?: number;
+  /** spec 015 (dashboard auth) — the `ActiveSession` this token pair was
+   * minted for. Present for admin roles (SUPER_ADMIN, FUEL_COMPANY_ADMIN,
+   * TRANSPORT_COMPANY_ADMIN); ABSENT for DRIVER and CLIENT, whose sessions
+   * stay single and counter-based (research R1). Optional in the type but
+   * required IN EFFECT for administrators: an admin payload with no `sid` is
+   * refused, since accepting it would be a permanent bypass of the session
+   * cap. Carried on BOTH tokens for the same reason `sgen` is — a closed
+   * session must not be renewable by its own refresh token (FR-039). Never
+   * generated inside `issueTokenPair`; always passed in, so refresh reissues
+   * for the SAME session rather than opening a new one. */
+  sid?: string;
 }
 
 export interface AuthenticatedUser {
@@ -29,4 +40,12 @@ export interface AuthenticatedUser {
    * (`authenticateSocket`); the REST path re-checks `sgen` on every request
    * inside `validateActiveSessionWithScoping` already. */
   sgen?: number;
+  /** spec 015 (dashboard auth) — the admin session id this connection
+   * presented, stamped from the VERIFIED token by `JwtStrategy.validate` and
+   * `authenticateSocket`, never re-read from the account (same discipline as
+   * `sgen`: sourcing both sides of a comparison from the account compares a
+   * value to itself). Present only for admin roles. `AuthController.logout`
+   * is the ONE handler permitted to read it — it needs to name the single
+   * session it is closing (FR-035). That is a review rule, not a type rule. */
+  sid?: string;
 }

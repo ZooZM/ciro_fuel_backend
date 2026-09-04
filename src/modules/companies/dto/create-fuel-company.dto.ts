@@ -1,4 +1,5 @@
-import { IsEmail, IsString, MinLength } from 'class-validator';
+import { IsEmail, IsString, Matches, MinLength } from 'class-validator';
+import { E164_PATTERN } from '../../../common/constants/phone';
 
 export class CreateFuelCompanyDto {
   @IsString()
@@ -18,7 +19,10 @@ export class CreateFuelCompanyDto {
   @MinLength(2)
   adminFullName!: string;
 
-  @IsString()
+  // spec 015 R5 — an administrator's phone is now a login identifier and must
+  // resolve to exactly one account, so it must be a real E.164 number, not a
+  // placeholder.
+  @Matches(E164_PATTERN, { message: 'adminPhone must be a valid E.164 number' })
   adminPhone!: string;
 
   @IsString()

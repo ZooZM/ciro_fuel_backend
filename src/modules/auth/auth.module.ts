@@ -8,6 +8,10 @@ import { AuthController } from './auth.controller';
 import { JwtStrategy } from './strategies/jwt.strategy';
 import { PasswordResetService } from './services/password-reset.service';
 import { PasswordReset, PasswordResetSchema } from './schemas/password-reset.schema';
+import { LoginCode, LoginCodeSchema } from './schemas/login-code.schema';
+import { LoginCodeService } from './services/login-code.service';
+import { LoginAbuseService } from './services/login-abuse.service';
+import { ChallengeService, CHALLENGE_PROVIDER } from './services/challenge.service';
 import { UsersModule } from '../users/users.module';
 import { StationsModule } from '../stations/stations.module';
 
@@ -16,7 +20,10 @@ import { StationsModule } from '../stations/stations.module';
     UsersModule,
     StationsModule,
     PassportModule,
-    MongooseModule.forFeature([{ name: PasswordReset.name, schema: PasswordResetSchema }]),
+    MongooseModule.forFeature([
+      { name: PasswordReset.name, schema: PasswordResetSchema },
+      { name: LoginCode.name, schema: LoginCodeSchema },
+    ]),
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -27,7 +34,16 @@ import { StationsModule } from '../stations/stations.module';
     }),
   ],
   controllers: [AuthController],
-  providers: [AuthService, JwtStrategy, PasswordResetService],
+  providers: [
+    AuthService,
+    JwtStrategy,
+    PasswordResetService,
+    LoginCodeService,
+    LoginAbuseService,
+    // spec 015 R7 — the proof-of-work lives behind an interface so it can be
+    // swapped for a third-party CAPTCHA as one adapter.
+    { provide: CHALLENGE_PROVIDER, useClass: ChallengeService },
+  ],
   exports: [AuthService],
 })
 export class AuthModule {}

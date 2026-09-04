@@ -13,6 +13,10 @@ import { CompaniesService } from '../companies/companies.service';
 import { JwtPayload } from '../../common/interfaces/jwt-payload.interface';
 import { ErrorCode } from '../../common/enums/error-code.enum';
 import { SessionRevocationCause } from '../../common/enums/session-revocation-cause.enum';
+import {
+  SESSION_CAPPED_ROLES,
+  isSessionCappedRole,
+} from '../../common/constants/session-capped-roles';
 
 const SALT_ROUNDS = 12;
 
@@ -27,13 +31,41 @@ export class UsersService {
     return this.userModel.findOne({ email: email.toLowerCase() }).select('+passwordHash').exec();
   }
 
-  // Scoped to the mobile roles: admin accounts are reachable by email only, so
-  // the SUPER_ADMIN's 'N/A' phone placeholder can never resolve to a login.
+  // Scoped to the mobile roles: for password login an admin account is
+  // reachable by email only. spec 015 T053 keeps this exactly as-is —
+  // `findSingleActiveAdminByPhone` below is the admin-phone resolver, and it
+  // is deliberately separate.
   async findByPhoneForAuth(phone: string): Promise<UserDocument | null> {
     return this.userModel
       .findOne({ phone: phone.trim(), role: { $in: [UserRole.CLIENT, UserRole.DRIVER] } })
       .select('+passwordHash')
       .exec();
+  }
+
+  /**
+   * spec 015 FR-014 / R5 — the load-bearing "exactly one active
+   * administrator" guarantee for passwordless code sign-in. Returns a user
+   * ONLY when the phone matches exactly one `isActive` account holding an
+   * administrator role. Zero matches, two-or-more matches, or an inactive
+   * match all return `null`, which folds into the same neutral response an
+   * unknown number gets — failing safe and silently, which is what
+   * enumeration-safety requires anyway (FR-027). The partial unique index on
+   * `phone` is a second line of defence; this `countDocuments`-style check
+   * is the guarantee, because the index says nothing about `isActive`.
+   *
+   * Anonymous caller: must be run inside `TenantContextService.runUnscoped`,
+   * exactly as `PasswordResetService` runs `findByPhoneForAuth`.
+   */
+  async findSingleActiveAdminByPhone(phone: string): Promise<UserDocument | null> {
+    const matches = await this.userModel
+      .find({
+        phone: phone.trim(),
+        role: { $in: SESSION_CAPPED_ROLES as UserRole[] },
+        isActive: true,
+      })
+      .limit(2)
+      .exec();
+    return matches.length === 1 ? matches[0] : null;
   }
 
   async findById(id: string | Types.ObjectId): Promise<UserDocument> {
@@ -133,7 +165,7 @@ export class UsersService {
    * inactive account gets at login.
    */
   async validateActiveSessionWithScoping(
-    payload: Pick<JwtPayload, 'sub' | 'sgen'>,
+    payload: Pick<JwtPayload, 'sub' | 'sgen' | 'sid'>,
   ): Promise<{ user: UserDocument; parentFuelCompanyId?: string }> {
     const { user, usable, parentFuelCompanyId, unusableReason } = await this._loadActiveUser(
       payload.sub,
@@ -144,6 +176,15 @@ export class UsersService {
       // distinct cause here, not `lastRevocationCause` (which only ever tracks
       // ACCOUNT-level revocation and is never set by company suspension — falling back
       // to it would misreport the reason as stale/unrelated or leave it undefined).
+      //
+      // spec 015 T022a: company suspension (`usable: false`,
+      // `unusableReason: 'COMPANY_SUSPENDED'`) is a LIVE check in
+      // `_loadActiveUser`, not a revocation write, so it is caught HERE —
+      // before the `sid` membership check below — and keeps reporting
+      // `cause: COMPANY_SUSPENDED` for an administrator too (FR-037's second
+      // half). The generation bump on password reset / deactivation likewise
+      // lands here via `sgenMismatch`, with its own cause, before any `sid`
+      // logic is reached.
       const cause =
         unusableReason === 'COMPANY_SUSPENDED'
           ? SessionRevocationCause.COMPANY_SUSPENDED
@@ -153,6 +194,29 @@ export class UsersService {
         cause,
         message: 'Your session has ended',
       });
+    }
+    // spec 015 T023 / FR-035/038/039 — the per-session check, AFTER the
+    // `sgen` comparison above. Only administrators (SESSION_CAPPED_ROLES)
+    // carry a `sid`; for DRIVER/CLIENT `payload.sid` is absent and this
+    // block is skipped ENTIRELY — that skip is what makes FR-033 structural
+    // rather than a regression-test outcome. An admin payload with no `sid`,
+    // or one whose `sid` is no longer in `activeSessions` (evicted by the
+    // cap, or closed by that device's own sign-out), is refused with the
+    // same structured shape. `SESSION_LIMIT_EXCEEDED` is the correct cause
+    // for every path that reaches here: a revoke-all bumped `sgen` and was
+    // already handled above; only eviction and self-logout leave a `sid`
+    // missing without a generation change, and the signed-out device has
+    // discarded its tokens anyway.
+    if (isSessionCappedRole(user!.role)) {
+      const sid = payload.sid;
+      const open = (user!.activeSessions ?? []).some((s) => s.sid === sid);
+      if (!sid || !open) {
+        throw new UnauthorizedException({
+          error: ErrorCode.SESSION_REVOKED,
+          cause: SessionRevocationCause.SESSION_LIMIT_EXCEEDED,
+          message: 'Your session has ended',
+        });
+      }
     }
     return { user: user!, parentFuelCompanyId };
   }
@@ -184,7 +248,17 @@ export class UsersService {
       .findByIdAndUpdate(
         userId,
         {
-          $set: { passwordHash, lastRevocationCause: SessionRevocationCause.PASSWORD_RESET },
+          $set: {
+            passwordHash,
+            lastRevocationCause: SessionRevocationCause.PASSWORD_RESET,
+            // spec 015 FR-036: an administrator's every device ends on a
+            // completed reset. The generation bump alone already refuses
+            // every prior token (the `sgen` comparison runs for every role),
+            // so this is belt-and-braces — but leaving stale entries behind
+            // would let the array drift up against the cap and silently evict
+            // a legitimate new session.
+            activeSessions: [],
+          },
           $inc: { sessionGeneration: 1 },
         },
         { new: true, session },
@@ -197,33 +271,101 @@ export class UsersService {
   }
 
   /**
-   * Bumps `sessionGeneration` alone — the general-purpose revocation
-   * primitive behind sign-out, login's displacement of a prior session,
-   * and deactivation (spec 006 FR-029/035/042). Distinct from
-   * {@link revokeAndSetPassword}: those three callers have nothing else
-   * to write to the user document itself, only their own separate audit
-   * row alongside this bump, in the same transaction.
+   * spec 006 FR-029/035/042 + spec 015 research R2 — "end EVERY session for
+   * this account". Bumps `sessionGeneration` (the epoch
+   * `validateActiveSessionWithScoping` compares the JWT's `sgen` against)
+   * AND clears `activeSessions` (spec 015 FR-036/037: an administrator's
+   * every device ends). This is the old `revokeSession` plus one `$set`.
    *
-   * `cause` records WHY on the user document itself, for
+   * Callers: DRIVER/CLIENT login (displacing the prior session) and logout,
+   * password reset (via {@link revokeAndSetPassword}), and deactivation.
+   * Admin login/logout do NOT call this — they use {@link openSession} /
+   * {@link closeSession}, which leave `sessionGeneration` untouched so the
+   * administrator's OTHER devices keep working.
+   *
+   * `cause` records WHY on the user document for
    * `validateActiveSessionWithScoping`'s mismatch branch to read back
-   * (FR-036) — omitted for sign-out, which needs no explanation on the
-   * next stale-token request since there is none to send: the device that
-   * signed out already cleared its own tokens.
+   * (FR-036) — omitted for a plain sign-out, which needs no explanation:
+   * the device that signed out already cleared its own tokens.
+   *
+   * Argument order changed from the old `revokeSession(userId, session,
+   * cause)` to `(userId, cause, session)` deliberately, so every call site
+   * had to be revisited when the semantics widened (research R2).
    */
-  async revokeSession(
+  async revokeAllSessions(
     userId: string,
-    session?: ClientSession,
     cause?: SessionRevocationCause,
+    session?: ClientSession,
   ): Promise<UserDocument> {
     const user = await this.userModel
       .findByIdAndUpdate(
         userId,
         {
           $inc: { sessionGeneration: 1 },
-          ...(cause
-            ? { $set: { lastRevocationCause: cause } }
-            : { $unset: { lastRevocationCause: '' } }),
+          $set: { activeSessions: [], ...(cause ? { lastRevocationCause: cause } : {}) },
+          ...(cause ? {} : { $unset: { lastRevocationCause: '' } }),
         },
+        { new: true, session },
+      )
+      .exec();
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+    return user;
+  }
+
+  /**
+   * spec 015 research R2 — admin only. Appends this sign-in's session to
+   * `activeSessions`, evicts the oldest beyond `cap`, and returns the
+   * evicted `sid`s so the caller writes their REVOKED/SESSION_LIMIT_EXCEEDED
+   * audit rows in the SAME transaction (Principle V). Ordering is by
+   * `createdAt` — FR-038 says "the oldest session", and `createdAt` needs no
+   * write on the request path, unlike an LRU policy which would touch `User`
+   * on every request.
+   *
+   * Does NOT touch `sessionGeneration`: an admin signing in on a laptop must
+   * not invalidate the tokens on their phone (FR-032). The read-then-write
+   * runs inside the caller's `session.withTransaction`, whose automatic
+   * retry on a write conflict covers the rare same-admin concurrent sign-in.
+   */
+  async openSession(
+    userId: string,
+    sid: string,
+    cap: number,
+    session: ClientSession,
+  ): Promise<{ evictedSids: string[] }> {
+    const user = await this.userModel.findById(userId).session(session).exec();
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+    const merged = [...(user.activeSessions ?? []), { sid, createdAt: new Date() }].sort(
+      (a, b) => a.createdAt.getTime() - b.createdAt.getTime(),
+    );
+    const kept = merged.slice(Math.max(0, merged.length - cap));
+    const keptSids = new Set(kept.map((s) => s.sid));
+    const evictedSids = merged.filter((s) => !keptSids.has(s.sid)).map((s) => s.sid);
+    await this.userModel
+      .updateOne({ _id: userId }, { $set: { activeSessions: kept } }, { session })
+      .exec();
+    return { evictedSids };
+  }
+
+  /**
+   * spec 015 research R2 — admin only. Removes exactly one session from
+   * `activeSessions`. Deliberately does NOT bump `sessionGeneration` —
+   * that is precisely what leaves the administrator's other devices working
+   * (FR-035). There is no body and no way to close another device's
+   * session. Returns the user so the caller can write the SIGNED_OUT row.
+   */
+  async closeSession(
+    userId: string,
+    sid: string,
+    session?: ClientSession,
+  ): Promise<UserDocument> {
+    const user = await this.userModel
+      .findByIdAndUpdate(
+        userId,
+        { $pull: { activeSessions: { sid } } },
         { new: true, session },
       )
       .exec();

@@ -28,6 +28,11 @@ export class JwtStrategy extends PassportStrategy(Strategy, 'jwt') {
       role: user.role,
       companyId: user.companyId?.toString(),
       parentFuelCompanyId,
+      // spec 015 T023a — carried from the VERIFIED token, never re-read from
+      // the account (same discipline as `sgen` on the socket path). Present
+      // only for admin roles. `AuthController.logout` is the one handler
+      // permitted to read it: it needs to name the single session it closes.
+      sid: payload.sid,
     };
   }
 }

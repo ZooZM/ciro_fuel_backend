@@ -181,6 +181,15 @@ export class TrackingGateway implements OnGatewayConnection, OnApplicationShutdo
       // already in flight, so this is the only thing standing between a
       // displaced device and the authoritative position of a truck. Refused
       // BEFORE presence, gating, and any write (realtime-contract §1).
+      //
+      // spec 015 research R4: this stays `sgen`-only. `location:update`'s
+      // ONLY caller is a DRIVER — a role with no `sid` and single-session
+      // semantics. Adding a `sid` comparison here would be dead code
+      // guarding a role that cannot reach it, and would need
+      // `activeSessions` loaded on the per-frame path for no benefit. The
+      // handshake path (`authenticateSocket` -> `validateActiveSessionWithScoping`)
+      // already gains the `sid` check, which covers an admin holding an
+      // `order:watch` subscription. Do not "fix" this asymmetry.
       if ((client.data.user.sgen ?? 0) !== (driver.sessionGeneration ?? 0)) {
         return { ok: false, error: 'SESSION_REVOKED' };
       }

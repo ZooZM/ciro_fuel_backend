@@ -56,5 +56,10 @@ export async function authenticateSocket(
     // itself, always agrees, and yields a silently inert guard. Absent
     // normalises to 0 on the comparison side.
     sgen: payload.sgen,
+    // spec 015 T023a — same discipline, for the admin session id. The
+    // handshake path's `validateActiveSessionWithScoping` call above already
+    // enforces `sid` membership; this is carried only so a handler could
+    // name the session if it ever needed to (none does today).
+    sid: payload.sid,
   };
 }

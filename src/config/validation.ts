@@ -1,4 +1,5 @@
 import * as Joi from 'joi';
+import { E164_PATTERN } from '../common/constants/phone';
 
 export const validationSchema = Joi.object({
   NODE_ENV: Joi.string().valid('development', 'production', 'test').default('development'),
@@ -24,6 +25,11 @@ export const validationSchema = Joi.object({
   SUPER_ADMIN_EMAIL: Joi.string().email().optional(),
   SUPER_ADMIN_PASSWORD: Joi.string().min(8).optional(),
   SUPER_ADMIN_FULL_NAME: Joi.string().optional(),
+  // spec 015 R5 — an administrator's phone is now a login identifier, so the
+  // seeded SUPER_ADMIN can no longer carry the literal 'N/A'. Optional in the
+  // schema (the app boots without seeding); `scripts/seed-super-admin.ts`
+  // fails loudly if it is absent or not E.164 when it actually runs.
+  SUPER_ADMIN_PHONE: Joi.string().pattern(E164_PATTERN).optional(),
   // Straight-line distance ÷ average speed (spec 004 FR-029, plan.md §5) —
   // an honest approximation, not a routed ETA.
   ORDER_AVERAGE_SPEED_KMH: Joi.number().positive().default(60),
@@ -45,9 +51,26 @@ export const validationSchema = Joi.object({
   // rather than a provider-specific one: it is already in the secrets
   // manifest, so a new name would mean a new secret, a new IAM binding and a
   // manifest change to express the same thing.
-  SMS_API_KEY: Joi.string().allow('').default(''),
+  //
+  // spec 015 R6 — conditionally REQUIRED when SMS_PROVIDER=taqnyat, or a
+  // production deployment starts "configured for Taqnyat" with a blank token
+  // and every SMS then fails against an unauthenticated provider (FR-003).
+  // `.invalid('')` in the `then` branch is NOT redundant with `.min(1)`:
+  // Joi keeps the base schema's `.allow('')` when it merges the conditional
+  // one, and an explicitly-permitted value short-circuits every other rule —
+  // so `.min(1).required()` alone is silently satisfied by an empty string.
+  // This exact defect shipped twice here (CORS_ALLOWED_ORIGINS, GCS_BUCKET),
+  // both commented above. Conditioned on the PROVIDER, not NODE_ENV, so a
+  // developer pointing at the real provider is told immediately.
+  SMS_API_KEY: Joi.string()
+    .allow('')
+    .default('')
+    .when('SMS_PROVIDER', { is: 'taqnyat', then: Joi.string().min(1).invalid('').required() }),
   SMS_ENDPOINT_URL: Joi.string().uri().default('https://api.taqnyat.sa/v1/messages'),
-  SMS_SENDER_ID: Joi.string().allow('').default(''),
+  SMS_SENDER_ID: Joi.string()
+    .allow('')
+    .default('')
+    .when('SMS_PROVIDER', { is: 'taqnyat', then: Joi.string().min(1).invalid('').required() }),
   // spec 006 (driver auth & session) — defaults per spec.md Assumptions.
   PASSWORD_RESET_EXPIRY_MINUTES: Joi.number().default(5),
   PASSWORD_RESET_MAX_ATTEMPTS: Joi.number().default(5),
@@ -191,4 +214,31 @@ export const validationSchema = Joi.object({
   // guess — an absent value must fail at boot, not surface as an
   // unexplained ceiling the first time a company accrues commission.
   PLATFORM_DEFAULT_COMMISSION_CEILING: Joi.number().positive().required(),
+
+  // ── spec 015 (dashboard auth & Taqnyat SMS) ──────────────────────────────
+
+  // FR-032, FR-042 — the concurrent admin-session cap. A `.default()` IS
+  // correct here, unlike TRUSTED_PROXY_HOPS above: guessing wrong is a UX
+  // inconvenience, not a silently wrong security posture, and `1` remains a
+  // valid value that reproduces today's displacement behaviour for admins.
+  AUTH_MAX_ADMIN_SESSIONS: Joi.number().integer().min(1).default(3),
+
+  // FR-013/021/023/024/025/026 — the passwordless sign-in code and its abuse
+  // controls. The first four DELIBERATELY mirror the PASSWORD_RESET_* values
+  // above (5 / 5 / 3 / 15): one security posture across both anonymous code
+  // flows, not two sets that drift apart until one becomes the weak one.
+  LOGIN_OTP_EXPIRY_MINUTES: Joi.number().positive().default(5),
+  LOGIN_OTP_MAX_ATTEMPTS: Joi.number().integer().min(1).default(5),
+  LOGIN_OTP_MAX_REQUESTS: Joi.number().integer().min(1).default(3),
+  LOGIN_OTP_WINDOW_MINUTES: Joi.number().positive().default(15),
+  LOGIN_OTP_CHALLENGE_AFTER: Joi.number().integer().min(1).default(2),
+  LOGIN_OTP_FAIL_THRESHOLD: Joi.number().integer().min(1).default(10),
+  LOGIN_OTP_BLOCK_MINUTES: Joi.number().positive().default(60),
+  // R7 — leading zero bits required of sha256(seed || nonce). `0` disables
+  // the search (any nonce satisfies zero bits) and is what the e2e
+  // environment sets so no suite spends CPU or turns timing-flaky; `0` must
+  // stay reachable in production too, as the escape hatch if the challenge
+  // ever proves to be what keeps a legitimate administrator out.
+  LOGIN_POW_DIFFICULTY_BITS: Joi.number().integer().min(0).max(32).default(18),
+  LOGIN_POW_SEED_TTL_SECONDS: Joi.number().integer().min(30).default(300),
 });

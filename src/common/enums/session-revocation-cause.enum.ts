@@ -21,4 +21,15 @@ export enum SessionRevocationCause {
   // this cause is safe to reveal only to someone who already holds a live session,
   // the same precedent `ACCOUNT_DEACTIVATED` already established for this exact enum.
   COMPANY_SUSPENDED = 'COMPANY_SUSPENDED',
+  // spec 015 (dashboard auth) FR-038 — set on the session an administrator's
+  // oldest device holds when a new sign-in takes them past
+  // `auth.maxAdminSessions`. Deliberately DISTINCT from SIGNED_IN_ELSEWHERE:
+  // that cause means "your one session moved to another device", a true
+  // statement for a DRIVER/CLIENT and a misleading one for an administrator
+  // who still holds two other working sessions. The dashboard maps this to
+  // its own message and — unlike SIGNED_IN_ELSEWHERE — MUST show it, since an
+  // admin evicted by a device limit they may not know exists has no other way
+  // to understand why. Never reaches a DRIVER/CLIENT; the mobile mirror gains
+  // a value it will never receive, which the existing parity test enforces.
+  SESSION_LIMIT_EXCEEDED = 'SESSION_LIMIT_EXCEEDED',
 }

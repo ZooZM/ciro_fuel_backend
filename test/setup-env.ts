@@ -48,6 +48,12 @@ process.env.LOG_LEVEL ||= 'silent';
 // IS its subject.
 process.env.SCHEDULER_LEASE_ENABLED ||= 'false';
 
+// spec 015 T082: proof-of-work OFF for every suite — `0` means any nonce
+// satisfies zero leading zero bits, so no suite spends CPU solving a
+// challenge or becomes timing-flaky. `login-abuse.e2e-spec.ts` still
+// exercises that a challenge is DEMANDED; it just never has to be solved.
+process.env.LOGIN_POW_DIFFICULTY_BITS ||= '0';
+
 // spec 013: PLATFORM_DEFAULT_COMMISSION_CEILING is `.required()` with no
 // Joi default (config/validation.ts) — a real financial policy value must
 // not be guessed. Every e2e suite needs a placeholder present before

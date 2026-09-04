@@ -78,9 +78,18 @@ export class PasswordResetService {
     const maxAttempts = this.config.get<number>('passwordReset.maxAttempts') ?? 5;
     const response = { expiresInMinutes: expiryMinutes, attemptsAllowed: maxAttempts };
 
-    const holder = await this.tenantContext.runUnscoped(() =>
-      this.usersService.findByPhoneForAuth(phone),
-    );
+    // spec 015 T107a / R5 — a CLIENT/DRIVER resolves via `findByPhoneForAuth`
+    // (password-login scoping, unchanged); an administrator's phone is now a
+    // login identifier too, so fall back to the "exactly one active admin"
+    // resolver. Both lookups run unscoped (anonymous caller). The rate limit
+    // above already ran, keyed on the submitted string and regardless of
+    // whether either lookup finds anything (FR-071/enumeration safety).
+    const holder = await this.tenantContext.runUnscoped(async () => {
+      return (
+        (await this.usersService.findByPhoneForAuth(phone)) ??
+        (await this.usersService.findSingleActiveAdminByPhone(phone))
+      );
+    });
     if (!holder) {
       return response;
     }

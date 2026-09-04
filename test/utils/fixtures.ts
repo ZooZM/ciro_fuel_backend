@@ -29,19 +29,26 @@ export function uniquePhone(): string {
 
 export interface CompanyFixture {
   companyId: string;
-  admin: { id: string; email: string; token: string };
-  client: { id: string; email: string; token: string; stationLocation: [number, number] };
+  admin: { id: string; email: string; token: string; phone: string };
+  client: {
+    id: string;
+    email: string;
+    token: string;
+    phone: string;
+    stationLocation: [number, number];
+  };
   // spec 004: drivers belong to a Transportation Company, not the Fuel
   // Company directly. transportCompanyId serves RegionCode.RIYADH — the
   // same region every fixture client's station is tagged with — so routing
   // resolves this transporter automatically (the single-candidate case) in
   // every test that approves an order without extra setup.
   transportCompanyId: string;
-  transportAdmin: { id: string; email: string; token: string };
+  transportAdmin: { id: string; email: string; token: string; phone: string };
   driver: {
     id: string;
     email: string;
     token: string;
+    phone: string;
     location: [number, number];
     maxCapacityLiters: number;
   };
@@ -54,7 +61,7 @@ export interface CompanyFixture {
 }
 
 export interface TwoCompanyFixture {
-  superAdmin: { id: string; email: string; token: string };
+  superAdmin: { id: string; email: string; token: string; phone: string };
   companyA: CompanyFixture;
   companyB: CompanyFixture;
 }
@@ -93,24 +100,29 @@ async function createCompanyFixture(
   });
   const companyId = (company._id as { toString(): string }).toString();
 
+  // spec 015 R5: an administrator's phone is now a login identifier and the
+  // partial unique index covers admin roles — it must vary per fixture, the
+  // same as the CLIENT/DRIVER/transportAdmin phones already do.
+  const adminPhone = uniquePhone();
   const admin = await usersService.create({
     companyId: company._id as never,
     role: UserRole.FUEL_COMPANY_ADMIN,
     email: `admin@${name.toLowerCase().replace(/\s+/g, '')}.test`,
     password: DEFAULT_PASSWORD,
     fullName: `${name} Admin`,
-    phone: '+966500000001',
+    phone: adminPhone,
     isActive: true,
   });
 
   const stationLocation: [number, number] = [center[0] + 0.01, center[1] + 0.01];
+  const clientPhone = uniquePhone();
   const client = await usersService.create({
     companyId: company._id as never,
     role: UserRole.CLIENT,
     email: `client@${name.toLowerCase().replace(/\s+/g, '')}.test`,
     password: DEFAULT_PASSWORD,
     fullName: `${name} Client`,
-    phone: uniquePhone(),
+    phone: clientPhone,
     isActive: true,
     station: {
       regionCode: RegionCode.RIYADH,
@@ -145,25 +157,27 @@ async function createCompanyFixture(
   await companiesService.assignRegions(companyId, String(transportCompany._id), [
     RegionCode.RIYADH,
   ]);
+  const transportAdminPhone = uniquePhone();
   const transportAdmin = await usersService.create({
     companyId: transportCompany._id as never,
     role: UserRole.TRANSPORT_COMPANY_ADMIN,
     email: `transportadmin@${name.toLowerCase().replace(/\s+/g, '')}.test`,
     password: DEFAULT_PASSWORD,
     fullName: `${name} Transport Admin`,
-    phone: uniquePhone(),
+    phone: transportAdminPhone,
     isActive: true,
   });
 
   const driverLocation: [number, number] = [center[0], center[1]];
   const maxCapacityLiters = 5000;
+  const driverPhone = uniquePhone();
   const driver = await usersService.create({
     companyId: transportCompany._id as never,
     role: UserRole.DRIVER,
     email: `driver@${name.toLowerCase().replace(/\s+/g, '')}.test`,
     password: DEFAULT_PASSWORD,
     fullName: `${name} Driver`,
-    phone: uniquePhone(),
+    phone: driverPhone,
     isActive: true,
     isAvailable: true,
     isOnline: true,
@@ -199,11 +213,17 @@ async function createCompanyFixture(
 
   return {
     companyId,
-    admin: { id: String(admin._id), email: admin.email, token: adminAuth.accessToken },
+    admin: {
+      id: String(admin._id),
+      email: admin.email,
+      token: adminAuth.accessToken,
+      phone: adminPhone,
+    },
     client: {
       id: String(client._id),
       email: client.email,
       token: clientAuth.accessToken,
+      phone: clientPhone,
       stationLocation,
     },
     transportCompanyId: String(transportCompany._id),
@@ -211,11 +231,13 @@ async function createCompanyFixture(
       id: String(transportAdmin._id),
       email: transportAdmin.email,
       token: transportAdminAuth.accessToken,
+      phone: transportAdminPhone,
     },
     driver: {
       id: String(driver._id),
       email: driver.email,
       token: driverAuth.accessToken,
+      phone: driverPhone,
       location: driverLocation,
       maxCapacityLiters,
     },
@@ -353,12 +375,13 @@ export async function seedTwoCompanies(app: INestApplication): Promise<TwoCompan
   const authService = app.get(AuthService);
   await seedDefaultWarehouse(app);
 
+  const superAdminPhone = '+966500000099';
   const superAdminUser = await usersService.create({
     role: UserRole.SUPER_ADMIN,
     email: 'owner@platform.test',
     password: DEFAULT_PASSWORD,
     fullName: 'Platform Owner',
-    phone: '+966500000099',
+    phone: superAdminPhone,
     isActive: true,
   });
   const superAdminAuth = await authService.login({
@@ -376,6 +399,7 @@ export async function seedTwoCompanies(app: INestApplication): Promise<TwoCompan
       id: String(superAdminUser._id),
       email: superAdminUser.email,
       token: superAdminAuth.accessToken,
+      phone: superAdminPhone,
     },
     companyA,
     companyB,

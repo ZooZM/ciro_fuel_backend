@@ -6,7 +6,10 @@ import { RefreshTokenDto } from './dto/refresh-token.dto';
 import { RequestPasswordResetDto } from './dto/request-password-reset.dto';
 import { VerifyResetCodeDto } from './dto/verify-reset-code.dto';
 import { CompletePasswordResetDto } from './dto/complete-password-reset.dto';
+import { RequestLoginCodeDto } from './dto/request-login-code.dto';
+import { VerifyLoginCodeDto } from './dto/verify-login-code.dto';
 import { PasswordResetService } from './services/password-reset.service';
+import { LoginCodeService } from './services/login-code.service';
 import { Public } from '../../common/decorators/public.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { AuthenticatedUser } from '../../common/interfaces/jwt-payload.interface';
@@ -21,6 +24,7 @@ export class AuthController {
     private readonly usersService: UsersService,
     private readonly stationsService: StationsService,
     private readonly passwordResetService: PasswordResetService,
+    private readonly loginCodeService: LoginCodeService,
   ) {}
 
   @Public()
@@ -28,6 +32,30 @@ export class AuthController {
   @Post('login')
   login(@Body() dto: LoginDto) {
     return this.authService.login(dto);
+  }
+
+  // spec 015 US2 — passwordless administrator sign-in. Both @Public(). This
+  // 202 is identical for every outcome (admin, driver, client, unknown,
+  // inactive, or more than one match; SMS sent or failed) — never branch on
+  // the service result here (FR-015), the same rule `password-reset/request`
+  // follows. A code is created and sent ONLY when the number resolves to
+  // exactly one active administrator.
+  @Public()
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @HttpCode(202)
+  @Post('login/code/request')
+  requestLoginCode(@Body() dto: RequestLoginCodeDto) {
+    return this.loginCodeService.requestCode(dto.phone, dto.challenge);
+  }
+
+  // Response shape is byte-identical to POST /auth/login (FR-016); both
+  // tokens carry `sid`.
+  @Public()
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @HttpCode(200)
+  @Post('login/code/verify')
+  verifyLoginCode(@Body() dto: VerifyLoginCodeDto) {
+    return this.loginCodeService.verifyCode(dto.phone, dto.code);
   }
 
   @Public()
@@ -38,10 +66,12 @@ export class AuthController {
 
   // FR-029: ends the session server-side, not just on the device — a
   // refresh token captured before this call must be refused afterwards.
+  // spec 015 FR-035: for an admin, only the calling session (`user.sid`,
+  // stamped from the verified token) is closed; the other devices continue.
   @HttpCode(204)
   @Post('logout')
   async logout(@CurrentUser() user: AuthenticatedUser): Promise<void> {
-    await this.authService.logout(user.userId);
+    await this.authService.logout(user);
   }
 
   // spec 006 US3 — FR-021: this response is identical whether `phone`

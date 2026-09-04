@@ -23,6 +23,7 @@
     "seed:dashboard": "ts-node -r tsconfig-paths/register scripts/seed-dashboard-actors.ts",
     "approve-route": "ts-node -r tsconfig-paths/register scripts/approve-and-route-order.ts",
     "migrate:005-stations": "ts-node -r tsconfig-paths/register scripts/migrate-005-stations.ts",
+    "normalize:admin-phones": "ts-node -r tsconfig-paths/register scripts/normalize-admin-phones.ts",
     "assign:driver-order": "ts-node -r tsconfig-paths/register scripts/assign-order-to-driver.ts"
   },
   "dependencies": {

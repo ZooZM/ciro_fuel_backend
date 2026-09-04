@@ -57,14 +57,42 @@ filter resets the cursor.
 | Method | Path | Roles | Body | Response |
 |--------|------|-------|------|----------|
 | POST | `/auth/login` **[public]** (10/min) | — | `{ phone, password }` (CLIENT/DRIVER) or `{ email, password }` (admin roles) | `{ accessToken, refreshToken, user: {id, role, companyId, fullName} }` |
+| POST | `/auth/login/code/request` **[public]** (10/min) | — | `{ phone, challenge? }` | `202 { expiresInMinutes, attemptsAllowed }` — **spec 015**, identical for every outcome (FR-015) |
+| POST | `/auth/login/code/verify` **[public]** (10/min) | — | `{ phone, code }` (6 digits) | same shape as `/auth/login` — **spec 015** |
 | POST | `/auth/refresh` **[public]** | — | `{ refreshToken }` | `{ accessToken, refreshToken }` |
+| POST | `/auth/logout` | any | — | `204` |
 | GET | `/auth/me` | any | — | current user profile, including `station`/`creditLimit` for a CLIENT (`undefined` for every other role) |
 
 `401` on bad credentials or suspended company / deactivated account (same message — no enumeration).
 
-Phone is the login identifier for CLIENT/DRIVER (E.164, unique platform-wide) and is never
-resolved for admin roles, so an admin placeholder phone can never authenticate. `phone` takes
-precedence when both identifiers are supplied.
+Phone is the login identifier for CLIENT/DRIVER (E.164, unique platform-wide). **Spec 015**: an
+administrator's phone is now a login identifier too — for `/auth/login/code/*` only, not for
+password `/auth/login`, which stays CLIENT/DRIVER-scoped. `phone` takes precedence when both
+identifiers are supplied to `/auth/login`.
+
+**Spec 015 — passwordless administrator sign-in.** `/auth/login/code/request` sends a 6-digit SMS
+code **only** when the number resolves to exactly one active account holding an admin role;
+every other outcome (driver, client, unknown, inactive, two-or-more) returns the identical `202`
+and no SMS. Hardened past the recovery flow: per-phone request rate limit, a self-hosted
+proof-of-work `challenge` demanded after repeated rate-limited requests (`400 CHALLENGE_REQUIRED`
+carrying `{ seed, difficultyBits }`), a per-code attempt lockout, and a cross-code temporary block
+(`429 LOGIN_RATE_LIMITED` with `retryAfterSeconds`, deliberately indistinguishable from the
+request-rate `429`). All counters **fail closed** — a Redis outage returns `503`, never `202`.
+`/auth/login/code/verify` refuses wrong / expired / superseded / attempt-locked codes with one
+`400 LOGIN_CODE_INVALID` and no attempt count.
+
+**Spec 015 — session model, admin roles only.** `/auth/login` (and code verify) **open** an
+`ActiveSession` rather than displacing the prior one: an administrator holds up to
+`AUTH_MAX_ADMIN_SESSIONS` (default 3) concurrent, independently-revocable sessions; a further
+sign-in evicts the oldest, whose next request returns `SESSION_REVOKED` with
+`cause: SESSION_LIMIT_EXCEEDED`. **No `session:revoked` socket push and no `disconnectUser`** on an
+admin sign-in (the room is per-user). Both tokens carry a `sid` claim for admin roles;
+DRIVER/CLIENT payloads are byte-identical to before (no `sid`, `sessionGeneration` still bumped on
+every login — displacement unchanged). `/auth/logout` closes **only the calling `sid`** for an
+admin (other devices continue); unchanged for DRIVER/CLIENT. `/auth/refresh` additionally refuses
+when the presented token's `sid` is no longer in `activeSessions`, and re-issues the pair with the
+**same** `sid`. Password reset, deactivation and company suspension end **every** session for any
+role.
 
 **Spec 005**: `station` on `/auth/me` is unchanged in shape but now read from the standalone
 `Station` collection's client default rather than the embedded field — invisible to the driver

@@ -367,14 +367,17 @@ export class UsersController {
   @Patch(':id/deactivate')
   async deactivate(@Param('id', ObjectIdPipe) id: string) {
     const session = await this.connection.startSession();
-    let revoked!: Awaited<ReturnType<UsersService['revokeSession']>>;
+    let revoked!: Awaited<ReturnType<UsersService['revokeAllSessions']>>;
     try {
       await session.withTransaction(async () => {
         await this.usersService.setActive(id, false, session);
-        revoked = await this.usersService.revokeSession(
+        // spec 015 FR-037: `revokeAllSessions` bumps `sessionGeneration` AND
+        // clears `activeSessions`, so an administrator's every device ends
+        // too — not only a driver's one session.
+        revoked = await this.usersService.revokeAllSessions(
           id,
-          session,
           SessionRevocationCause.ACCOUNT_DEACTIVATED,
+          session,
         );
         await this.usersService.releaseActiveOrderOnDeactivation(id, session);
         await this.sessionAudit.revoked(

@@ -49,6 +49,8 @@ export interface AppConfig {
     email?: string;
     password?: string;
     fullName?: string;
+    // spec 015 R5 — E.164; required by the seed script, not by boot.
+    phone?: string;
   };
   order: {
     averageSpeedKmh: number;
@@ -161,6 +163,26 @@ export interface AppConfig {
   billing: {
     defaultCommissionCeiling: number;
   };
+  // spec 015 (dashboard auth) — the concurrent admin-session cap (FR-032/042).
+  auth: {
+    maxAdminSessions: number;
+  };
+  // spec 015 — the passwordless sign-in code and its abuse controls. Expiry,
+  // attempts, requests and window mirror `passwordReset.*` deliberately: one
+  // security posture across both anonymous code flows.
+  loginOtp: {
+    expiryMinutes: number;
+    maxAttempts: number;
+    maxRequests: number;
+    windowMinutes: number;
+    challengeAfter: number;
+    failThreshold: number;
+    blockMinutes: number;
+    pow: {
+      difficultyBits: number;
+      seedTtlSeconds: number;
+    };
+  };
 }
 
 export default (): AppConfig => ({
@@ -213,6 +235,7 @@ export default (): AppConfig => ({
     email: process.env.SUPER_ADMIN_EMAIL,
     password: process.env.SUPER_ADMIN_PASSWORD,
     fullName: process.env.SUPER_ADMIN_FULL_NAME ?? 'Platform Owner',
+    phone: process.env.SUPER_ADMIN_PHONE,
   },
   order: {
     averageSpeedKmh: parseFloat(process.env.ORDER_AVERAGE_SPEED_KMH ?? '60'),
@@ -338,5 +361,21 @@ export default (): AppConfig => ({
     // present and numeric — the same ordering `otp.expiryMinutes` above and
     // every other required() value on this platform already relies on.
     defaultCommissionCeiling: parseFloat(process.env.PLATFORM_DEFAULT_COMMISSION_CEILING!),
+  },
+  auth: {
+    maxAdminSessions: parseInt(process.env.AUTH_MAX_ADMIN_SESSIONS ?? '3', 10),
+  },
+  loginOtp: {
+    expiryMinutes: parseInt(process.env.LOGIN_OTP_EXPIRY_MINUTES ?? '5', 10),
+    maxAttempts: parseInt(process.env.LOGIN_OTP_MAX_ATTEMPTS ?? '5', 10),
+    maxRequests: parseInt(process.env.LOGIN_OTP_MAX_REQUESTS ?? '3', 10),
+    windowMinutes: parseInt(process.env.LOGIN_OTP_WINDOW_MINUTES ?? '15', 10),
+    challengeAfter: parseInt(process.env.LOGIN_OTP_CHALLENGE_AFTER ?? '2', 10),
+    failThreshold: parseInt(process.env.LOGIN_OTP_FAIL_THRESHOLD ?? '10', 10),
+    blockMinutes: parseInt(process.env.LOGIN_OTP_BLOCK_MINUTES ?? '60', 10),
+    pow: {
+      difficultyBits: parseInt(process.env.LOGIN_POW_DIFFICULTY_BITS ?? '18', 10),
+      seedTtlSeconds: parseInt(process.env.LOGIN_POW_SEED_TTL_SECONDS ?? '300', 10),
+    },
   },
 });

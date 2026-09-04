@@ -55,6 +55,18 @@ export class SessionEvent {
   @Prop({ required: true, min: 0, immutable: true })
   generation!: number;
 
+  // spec 015 (dashboard auth) §6 / FR-040 — WHICH administrator session this
+  // event concerns. For an admin, `generation` no longer changes between
+  // sign-ins, so rows are distinguished by `type`, `occurredAt` and this.
+  // Present on admin session events (SIGNED_IN, SIGNED_OUT, and the
+  // per-eviction REVOKED row); ABSENT for DRIVER/CLIENT and on account-level
+  // events (password reset, deactivation, company suspension) that end every
+  // session at once. Without it, "which session did this admin hold at time
+  // T" — the question FR-040 asks and the reason this collection has no TTL —
+  // would be unanswerable.
+  @Prop({ type: String, immutable: true })
+  sid?: string;
+
   @Prop({ required: true, default: Date.now, immutable: true })
   occurredAt!: Date;
 

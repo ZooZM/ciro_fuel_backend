@@ -20,6 +20,12 @@ export interface SessionSubject {
   role: UserRole;
   /** The `sessionGeneration` in force AFTER the event being recorded. */
   generation: number;
+  /** spec 015 (dashboard auth) FR-040 — the admin `ActiveSession` this event
+   * concerns. Set ONLY by the admin login / logout / eviction paths; omitted
+   * on account-level events (password reset, deactivation, company
+   * suspension) that end every session at once, and on all DRIVER/CLIENT
+   * rows. */
+  sid?: string;
 }
 
 /**
@@ -71,6 +77,19 @@ export class SessionAuditService {
     await this._write(subject, SessionEventType.RECOVERY_VERIFY_FAILED, undefined, session);
   }
 
+  /**
+   * spec 015 FR-031 — mirrors the RECOVERY_* pair for the passwordless code
+   * sign-in flow. Written only when the number resolved to exactly one active
+   * administrator; the code is NEVER on the row.
+   */
+  async loginCodeRequested(subject: SessionSubject, session?: ClientSession): Promise<void> {
+    await this._write(subject, SessionEventType.LOGIN_CODE_REQUESTED, undefined, session);
+  }
+
+  async loginCodeVerifyFailed(subject: SessionSubject, session?: ClientSession): Promise<void> {
+    await this._write(subject, SessionEventType.LOGIN_CODE_VERIFY_FAILED, undefined, session);
+  }
+
   private async _write(
     subject: SessionSubject,
     type: SessionEventType,
@@ -86,6 +105,10 @@ export class SessionAuditService {
           type,
           cause,
           generation: subject.generation,
+          // spec 015 — present ONLY when the caller set it (admin session
+          // events). Omitted entirely otherwise so a DRIVER/CLIENT or
+          // account-level row carries no `sid` key at all.
+          ...(subject.sid ? { sid: subject.sid } : {}),
           occurredAt: new Date(),
         },
       ],

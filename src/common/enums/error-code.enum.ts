@@ -178,4 +178,21 @@ export enum ErrorCode {
   // VALIDATES membership, so a genuine refusal path exists here that has no
   // equivalent in tenant-scope or multi-party-scope.
   EXCHANGE_PARTY_INVALID = 'EXCHANGE_PARTY_INVALID',
+
+  // spec 015 (dashboard auth & Taqnyat SMS)
+  // The single refusal for the passwordless sign-in code — wrong, expired,
+  // superseded and attempt-locked-out alike (FR-017). Mirrors
+  // RESET_CODE_INVALID's discipline exactly: distinguishing the four states
+  // would tell an attacker which wall they hit. No attempt count in the body.
+  LOGIN_CODE_INVALID = 'LOGIN_CODE_INVALID',
+  // 429, carries `retryAfterSeconds` (FR-022). Used for BOTH the per-phone
+  // request-rate refusal AND the cross-code temporary block (FR-025) —
+  // deliberately indistinguishable, so a caller cannot tell which wall they
+  // hit, the same reasoning LOGIN_CODE_INVALID applies to its four states.
+  LOGIN_RATE_LIMITED = 'LOGIN_RATE_LIMITED',
+  // 400, carries `{ seed, difficultyBits }` (FR-023). Demanded only after
+  // `loginOtp.challengeAfter` rate-limited requests for a number; a missing,
+  // invalid, expired or replayed response is refused with this same code and
+  // a FRESH seed.
+  CHALLENGE_REQUIRED = 'CHALLENGE_REQUIRED',
 }
