@@ -605,6 +605,20 @@ async function main(): Promise<void> {
       ],
     },
   });
+  // Prices alone are not enough: the client app's create-order form draws its
+  // quantity ladder from `tankerCapacitiesLiters`, so a company with prices and
+  // no pricing config renders a fuel-type row with a quantity row that can
+  // never offer anything. Company A gets this at step 5a; B needs it too.
+  await call(`/companies/${fuelB.company._id}/pricing-config`, {
+    method: 'PUT',
+    token: fuelAdminB.accessToken,
+    body: {
+      deliveryFee: 30,
+      serviceFeePercent: 1,
+      taxRatePercent: 15,
+      tankerCapacitiesLiters: [20000, 22000, 32000, 33000, 36000, 42000, 46000],
+    },
+  });
   console.log(`✔ second fuel company ${fuelB.company._id} seeded — for isolation tests and fuel exchange (Part 3)`);
   actors.push({
     role: 'FUEL_COMPANY_ADMIN (company B)',
