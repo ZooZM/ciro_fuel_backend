@@ -399,11 +399,18 @@ export class UsersService {
       .exec();
   }
 
-  async create(data: Partial<User> & { password: string }): Promise<UserDocument> {
+  async create(
+    data: Partial<User> & { password: string },
+    session?: ClientSession,
+  ): Promise<UserDocument> {
     const { password, ...rest } = data;
     const passwordHash = await UsersService.hashPassword(password);
     try {
-      return await this.userModel.create({ ...rest, passwordHash });
+      // Array form is the one that accepts options — `create(doc, options)` reads its
+      // second argument as another DOCUMENT, so a session passed that way is silently
+      // ignored and the write lands outside the transaction.
+      const [user] = await this.userModel.create([{ ...rest, passwordHash }], { session });
+      return user;
     } catch (error) {
       throw UsersService.asConflict(error);
     }
@@ -493,10 +500,10 @@ export class UsersService {
     return user;
   }
 
-  async update(id: string, data: Partial<User>): Promise<UserDocument> {
+  async update(id: string, data: Partial<User>, session?: ClientSession): Promise<UserDocument> {
     let user: UserDocument | null;
     try {
-      user = await this.userModel.findByIdAndUpdate(id, data, { new: true }).exec();
+      user = await this.userModel.findByIdAndUpdate(id, data, { new: true, session }).exec();
     } catch (error) {
       throw UsersService.asConflict(error);
     }

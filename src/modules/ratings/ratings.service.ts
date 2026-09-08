@@ -7,14 +7,11 @@ import { User, UserDocument } from '../users/schemas/user.schema';
 import { OrderStatus } from '../../common/enums/order-status.enum';
 import { ErrorCode } from '../../common/enums/error-code.enum';
 import { TenantContextService } from '../../common/context/tenant-context.service';
+import { isDuplicateKeyError } from '../../common/utils/mongo-error.util';
 
 export interface SubmitRatingInput {
   score: number;
   review?: string;
-}
-
-function isDuplicateKeyError(err: unknown): boolean {
-  return typeof err === 'object' && err !== null && (err as { code?: number }).code === 11000;
 }
 
 /**

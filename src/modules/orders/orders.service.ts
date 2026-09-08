@@ -167,6 +167,14 @@ export class OrdersService {
       clientUser.companyId!,
       dto.fuelType,
       dto.quantityLiters,
+      // Redemption re-reads the delivery price from the SAME station the quote was
+      // issued against, so a transporter's rate change between quote and confirmation
+      // surfaces as QUOTE_STALE exactly as a fuel-price change already does.
+      {
+        regionCode: station.regionCode,
+        governorateCode: station.governorateCode,
+        coordinates: station.location.coordinates as [number, number],
+      },
     );
 
     const deliveryLocation = dto.deliveryLocation

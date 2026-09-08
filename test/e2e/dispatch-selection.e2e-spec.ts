@@ -67,7 +67,10 @@ async function seedCompanyWithDrivers(app: INestApplication) {
     email: `admin-${randomUUID()}@dispatchtest.test`,
     password: PASSWORD,
     fullName: 'Dispatch Admin',
-    phone: '+966500000001',
+    // spec 015 put FUEL_COMPANY_ADMIN under the partial unique phone index, so a literal
+    // here collides on the SECOND of this helper's six calls — the client below was
+    // already switched to `uniquePhone()`, this line was missed.
+    phone: uniquePhone(),
     isActive: true,
   });
 

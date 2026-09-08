@@ -10,7 +10,7 @@ import { UserRole } from '../../src/common/enums/user-role.enum';
 jest.setTimeout(120_000);
 
 /**
- * spec 013 T215/T217 — Part A's gate: the party-set isolation mechanism proven against
+ * spec 014 T215/T217 — Part A's gate: the party-set isolation mechanism proven against
  * the REAL `ExchangeRequest` collection, through the full app stack (real MongoDB
  * transactions, real `TenantContextService`), before any fuel-exchange service or
  * controller exists (`fuel-exchange.module.ts` registers only the schema at this point —

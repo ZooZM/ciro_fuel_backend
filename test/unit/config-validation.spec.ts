@@ -185,4 +185,31 @@ describe('Configuration validation (spec 012)', () => {
       expect(value.SCHEDULER_LEASE_TTL_MS).toBeGreaterThan(0);
     });
   });
+
+  describe('LOGIN_CODE_REVEAL_UNKNOWN_PHONE (spec 015 FR-015 opt-out)', () => {
+    // The default is the security property, so the default is what gets a test.
+    // Anyone who deletes the `.default(false)` — or "helpfully" makes it follow
+    // NODE_ENV — turns a login endpoint into an administrator-enumeration oracle
+    // in whichever environment they forgot about. This asserts the closed default.
+    it('defaults to false when absent', () => {
+      const { error, value } = validate({ ...base });
+
+      expect(error).toBeUndefined();
+      expect(value.LOGIN_CODE_REVEAL_UNKNOWN_PHONE).toBe(false);
+    });
+
+    it('is opt-in only by an explicit true', () => {
+      expect(validate({ ...base, LOGIN_CODE_REVEAL_UNKNOWN_PHONE: 'true' }).value
+        .LOGIN_CODE_REVEAL_UNKNOWN_PHONE).toBe(true);
+      expect(validate({ ...base, LOGIN_CODE_REVEAL_UNKNOWN_PHONE: 'false' }).value
+        .LOGIN_CODE_REVEAL_UNKNOWN_PHONE).toBe(false);
+    });
+
+    it('refuses a value that is neither true nor false', () => {
+      const { error } = validate({ ...base, LOGIN_CODE_REVEAL_UNKNOWN_PHONE: 'yes-please' });
+
+      expect(error).toBeDefined();
+      expect(error?.message).toContain('LOGIN_CODE_REVEAL_UNKNOWN_PHONE');
+    });
+  });
 });

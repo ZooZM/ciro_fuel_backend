@@ -1,5 +1,68 @@
 <!-- SPECKIT START -->
-Active feature — read this plan first: `specs/015-dashboard-auth-taqnyat-sms/plan.md`
+Previously implemented feature: `specs/016-broadcast-fuel-exchange/plan.md`
+(a fuel company raises ONE exchange offer that reaches every fuel company on the platform; each
+answers blind with a proposed price, and the raiser awards exactly one). **Implemented — 116 of
+119 tasks complete.** Supporting artifacts: `spec.md` (6 stories, 53 FRs, 12 SCs, 3 clarifications),
+`research.md` (12 decisions — R1, R2, R3, R5 and R8 each overturn something the spec, the approved
+design or the existing code assumed), `data-model.md`, `quickstart.md`,
+`contracts/rest-api-delta.md`, `contracts/isolation-contract.md`,
+`contracts/dashboard-integration.md`, `tasks.md` (119 tasks, full correction log in its Notes
+section). **Spans two repositories**: this backend and the dashboard at
+`E:\zeyad\web_dashboard_ciro_fuel`.
+
+**This replaces feature 014's Story 12** (the directed request to one named company). Binding
+decisions: an offer carries **no price** — each responding company proposes one and the agreed price
+is the awarded proposal's (FR-005a, R7) · proposals are **blind**, which is why they are their own
+collection rather than an array embedded on the offer — an embedded array travels with every read of
+its parent, and this codebase already shipped that exact leak once (spec 008's `findMine`
+verification trail) · the award is **one conditional update inside a transaction**, `modifiedCount`
+deciding the winner, because a read-then-write award is the same race feature 009 hit on concurrent
+assignment · `party-set-scope.plugin.ts` is **amended, not duplicated** — a market offer is one party
+plus `openToMarket: true`, a migrated directed offer stays exactly two parties · **grade eligibility
+is a relevance filter, not a confidentiality boundary** (R2), because putting it in the injected
+filter needs the viewer's price list inside every scoped query and freezing it breaks FR-006a ·
+**Slice 0 landed the isolation change, both schemas and the migration alone**, reviewed and gated
+(T026) before any endpoint or screen existed.
+
+**Implementation status**: all 6 user stories built and verified. Backend `npm run build` clean,
+`npx tsc --noEmit` clean, `npm run test` **316/316** across 40 suites, `npm run test:e2e`
+**531-534/540** across 93 suites (a shifting 6-9 suites fail on any given full run — always the
+same pre-existing, unrelated set the sequential-`MongoMemoryReplSet` resource pressure feature 011
+already documented; every fuel-exchange suite, ~45 tests across 9 files, passed on every run).
+Dashboard `tsc -b --force` reports the same pre-existing **33** `TS6133`/`TS6192` unused-import
+errors feature 009 left, in files this feature never touched; `vitest run` **116/116** real tests
+(103 baseline + 13 new), the same 2 pre-existing suites failing to *load*
+(`accessibility.test.tsx`, `orders.mutations.test.tsx`). **Not completed — needs something this
+session did not have**: T106 (the manual `quickstart.md` walkthrough, needs a running server),
+T107 (running the migration against a real target-environment database — this is a pre-deploy
+gate, not a task a development session closes), T108 (`flutter test` in the mobile repository,
+not present on this machine).
+
+**The migration is the irreversible step**: `scripts/migrate-exchange-requests-to-offers.ts` must run
+against each environment **before** this code deploys there, and every migrated record must carry
+`openToMarket: false`. A single `true` publishes a historical private request — including one never
+answered — to every fuel company on the platform. No test that exercises only new offers can see it.
+
+Two deliberate departures from the approved Figma, both recorded: the estimated-total row states
+quantity and grade rather than a currency amount (no price exists at creation, so it could only ever
+read zero), and the design's `المنطقة` field is labelled `الحي`, because the platform already uses
+that word for its 13 administrative `RegionCode` regions.
+
+**Corrections found while implementing** — the full log, including two genuine data-disclosure
+bugs T081a's own test caught (a raiser's payload was leaking a declining company's identity two
+independent ways — full contact details attached to every proposal regardless of outcome, and the
+raw `proposingCompanyId` surviving even after that fix), is in `tasks.md`'s *Notes* section. The
+one worth surfacing here: **every service-layer `$or` filter built on `ExchangeOffer` was silently
+discarded.** `party-set-scope.plugin.ts` injects its own top-level `$or` on every scoped read via
+`Query.where({ $or: [...] })`, and Mongoose's `where()` REPLACES an existing top-level key of the
+same name rather than combining it — so the grade-relevance filter, the `direction=all` union, and
+`summary`'s `awardedThisMonth` count each silently lost their own `$or` the moment the plugin's
+pre-hook ran. Found by the lifecycle e2e suite (company C, diesel-only, was seeing a PETROL_95
+market offer in its `incoming` list) — invisible to any unit test, since a unit test correctly
+does not register the isolation plugin at all. Fixed by nesting every such disjunction under
+`$and: [{ $or: [...] }]` instead, a key the plugin cannot collide with.
+
+Previously implemented feature: `specs/015-dashboard-auth-taqnyat-sms/plan.md`
 (administrators sign in to the web dashboard with their mobile number and a code sent by SMS).
 **Implemented — code complete across both repositories; full-suite / live-environment verification
 outstanding (see below).** Supporting artifacts: `spec.md` (7 stories, 74 FRs, 20 SCs, 5

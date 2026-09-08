@@ -29,18 +29,30 @@ function isQuery(ctx: unknown): ctx is Query<unknown, unknown> {
 }
 
 /**
- * spec 013 T210/research R3, `contracts/isolation-contract.md` — the third, deliberately
- * narrow global isolation mechanism. Serves `ExchangeRequest` alone: a record owned by an
- * ARRAY of companies, which neither `tenant-scope.plugin.ts` (one owner, forced on
- * create) nor `multi-party-scope.plugin.ts` (one owner plus role-narrowed OTHER viewers,
- * still forced on create) can express. See the contract's comparison table for why a
- * third mechanism, rather than bending either existing one, is the accepted departure.
+ * spec 014 T210/research R3, `contracts/isolation-contract.md` — the third, deliberately
+ * narrow global isolation mechanism. Serves `ExchangeRequest` (legacy, exactly two
+ * owners) and, since spec 016 (research R1), `ExchangeOffer`: a record owned by an ARRAY
+ * of companies, which neither `tenant-scope.plugin.ts` (one owner, forced on create) nor
+ * `multi-party-scope.plugin.ts` (one owner plus role-narrowed OTHER viewers, still forced
+ * on create) can express. See the contract's comparison table for why a third mechanism,
+ * rather than bending either existing one, is the accepted departure.
  *
  * The failure this prevents, if `ExchangeRequest` were marked `multiParty` instead: Company
  * A raises a request (`pre('save')` forces `fuelCompanyId = A`), Company B lists incoming
  * (`{ fuelCompanyId: B }`) and sees nothing — silently, permanently, with `SUPER_ADMIN`'s
  * bypass making the operator's own screen look correct throughout. Only a two-company test
  * asserting the RECIPIENT can read it catches this (T215's non-negotiable first case).
+ *
+ * **Amended for spec 016 (research R1)**: a market `ExchangeOffer` is a FOURTH shape —
+ * one owner (the raiser) plus an UNBOUNDED audience (every eligible fuel company) — that
+ * differs from the third shape by exactly one boolean (`openToMarket`) and lives in the
+ * same collection family as the migrated records that still need the third shape. Rather
+ * than add a fourth global mechanism (two of them registered against the same collection
+ * family, differing by one flag — the isolation contract's own argument for narrowness
+ * cuts against this), the injected filter below becomes a disjunction and `pre('save')`
+ * splits its validation on the same flag. `ExchangeRequest` keeps working unamended: every
+ * one of its documents has `openToMarket` undefined (falsy), so it always takes the
+ * two-party branch, byte-compatible with what this plugin validated before this change.
  */
 export function createPartySetScopePlugin(tenantContext: TenantContextService) {
   /** `undefined` means bypass (SUPER_ADMIN or no authenticated actor); any other role
@@ -87,9 +99,14 @@ export function createPartySetScopePlugin(tenantContext: TenantContextService) {
         const actingCompanyId = resolveActingCompanyId();
         if (!actingCompanyId) return;
         if (isQuery(this)) {
-          // Array membership, not equality — this is the whole point of the mechanism
-          // (contract's comparison table).
-          this.where({ partyCompanyIds: actingCompanyId });
+          // spec 016 research R1: array membership OR a market offer — a
+          // `FUEL_COMPANY_ADMIN` may read any document naming them a party
+          // (legacy two-company shape, unchanged) AND every document
+          // deliberately published to the whole market, regardless of
+          // whether they are named in it at all. `ExchangeRequest` documents
+          // never carry `openToMarket: true`, so this disjunction changes
+          // nothing for that collection.
+          this.where({ $or: [{ partyCompanyIds: actingCompanyId }, { openToMarket: true }] });
         }
       });
     });
@@ -100,17 +117,31 @@ export function createPartySetScopePlugin(tenantContext: TenantContextService) {
     // input, and this is the structural backstop that a party-set document can never be
     // saved with the acting company absent from its own parties, or with a party count
     // the domain never defined (exchange is always exactly two).
-    schema.pre('save', function (this: { isNew: boolean; partyCompanyIds?: unknown[] }) {
-      const actingCompanyId = resolveActingCompanyId();
-      if (!actingCompanyId || !this.isNew) return;
+    // spec 016 research R1: splits on `openToMarket` rather than forcing a value —
+    // forcing is exactly what makes tenant-scope/multi-party-scope unable to express
+    // two (or an unbounded number of) legitimate owners. A market offer must name
+    // EXACTLY the raiser and no one else; a two-party record (every `ExchangeRequest`,
+    // and a migrated `ExchangeOffer`) keeps the exact rule this plugin validated before
+    // this change — byte-compatible with what `ExchangeRequest` saves today.
+    schema.pre(
+      'save',
+      function (this: { isNew: boolean; partyCompanyIds?: unknown[]; openToMarket?: boolean }) {
+        const actingCompanyId = resolveActingCompanyId();
+        if (!actingCompanyId || !this.isNew) return;
 
-      const parties = (this.partyCompanyIds ?? []).map((id) => String(id));
-      if (parties.length !== 2 || !parties.includes(actingCompanyId)) {
-        throw new BadRequestException({
-          error: ErrorCode.EXCHANGE_PARTY_INVALID,
-          message: 'partyCompanyIds must name exactly two companies, including the one creating this record',
-        });
-      }
-    });
+        const parties = (this.partyCompanyIds ?? []).map((id) => String(id));
+        const valid = this.openToMarket
+          ? parties.length === 1 && parties[0] === actingCompanyId
+          : parties.length === 2 && parties.includes(actingCompanyId);
+        if (!valid) {
+          throw new BadRequestException({
+            error: ErrorCode.EXCHANGE_PARTY_INVALID,
+            message: this.openToMarket
+              ? 'A market offer must name exactly one party: the company raising it'
+              : 'partyCompanyIds must name exactly two companies, including the one creating this record',
+          });
+        }
+      },
+    );
   };
 }

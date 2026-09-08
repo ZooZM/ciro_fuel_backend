@@ -96,8 +96,19 @@ export class OrdersController {
   @Roles(UserRole.CLIENT)
   @Post('quote')
   async quote(@CurrentUser() user: AuthenticatedUser, @Body() dto: QuoteOrderDto) {
-    await this.stationsService.findOwnedByClient(dto.stationId, user.userId);
-    const quote = await this.pricingService.quote(user.companyId!, dto.fuelType, dto.quantityLiters);
+    const station = await this.stationsService.findOwnedByClient(dto.stationId, user.userId);
+    // The station the client is quoting FOR decides the delivery price now — the
+    // transporter's rate is per area, and the haul distance is measured to this point.
+    const quote = await this.pricingService.quote(
+      user.companyId!,
+      dto.fuelType,
+      dto.quantityLiters,
+      {
+        regionCode: station.regionCode,
+        governorateCode: station.governorateCode,
+        coordinates: station.location.coordinates as [number, number],
+      },
+    );
     // spec 013 T196/R9: a PROJECTION only — this call never writes, so an abandoned quote
     // (the overwhelming majority of quotes, by construction — see `PricingService`'s own
     // discipline of never committing anything at quote time) leaks no litres.

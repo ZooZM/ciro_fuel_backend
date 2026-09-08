@@ -1,7 +1,12 @@
-import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
-import { Company, CompanyDocument, PricingConfig } from './schemas/company.schema';
+import { ClientSession, Model, Types } from 'mongoose';
+import { Company, CompanyDocument, DeliveryRate, PricingConfig } from './schemas/company.schema';
 import { CompanyStatus } from '../../common/enums/company-status.enum';
 import { CompanyType } from '../../common/enums/company-type.enum';
 import { FuelType } from '../../common/enums/fuel-type.enum';
@@ -97,9 +102,13 @@ export class CompaniesService {
     return company;
   }
 
-  async create(data: Partial<Company>): Promise<CompanyDocument> {
+  async create(data: Partial<Company>, session?: ClientSession): Promise<CompanyDocument> {
     try {
-      return await this.companyModel.create(data);
+      // Array form is the one that accepts options — `create(doc, options)` reads its
+      // second argument as another DOCUMENT, so a session passed that way is silently
+      // ignored and the write lands outside the transaction.
+      const [company] = await this.companyModel.create([data], { session });
+      return company;
     } catch (error) {
       throw CompaniesService.asConflict(error);
     }
@@ -138,24 +147,41 @@ export class CompaniesService {
     return this.companyModel.find(id ? { _id: id } : {}).exec();
   }
 
+
   /**
-   * spec 013 Phase 15 (US12), a genuine platform capability gap found while wiring
-   * `NewFuelRequestForm.tsx`: `findAll` deliberately narrows a `FUEL_COMPANY_ADMIN` to
-   * their OWN company (FR-004a's boundary, `findAll`'s own doc comment) — correct for
-   * `GET /companies`, but it leaves no way for a fuel company to discover WHO it could
-   * raise a fuel-exchange request to. This is a separate, narrow read: every other
-   * ACTIVE fuel company, never the caller's own, and never anything beyond name/id (no
-   * pricing, no contact info — those are FR-086b's concern, disclosed only once a request
-   * already exists between the two parties).
+   * spec 016 (broadcast fuel exchange offers) FR-005/FR-007 — every OTHER active fuel
+   * company that sells `fuelType`, used both to refuse a raise with no eligible
+   * recipient at all (`EXCHANGE_NO_ELIGIBLE_COMPANY`) and to resolve who the market
+   * fan-out notifies (research R6). `excludingCompanyId` is optional because the
+   * grade-relevance filter on a viewer's OWN incoming list (research R2) needs no
+   * exclusion — a company never sees its own offers in `incoming` for an unrelated
+   * reason (FR-009), not because it is excluded here.
    */
-  findExchangePartners(excludingCompanyId: string): Promise<CompanyDocument[]> {
+  findActiveFuelCompaniesSellingGrade(
+    fuelType: FuelType,
+    excludingCompanyId?: string | Types.ObjectId,
+  ): Promise<CompanyDocument[]> {
     return this.companyModel
       .find({
         type: CompanyType.FUEL,
         status: CompanyStatus.ACTIVE,
-        _id: { $ne: excludingCompanyId },
+        fuelPrices: { $elemMatch: { fuelType } },
+        ...(excludingCompanyId ? { _id: { $ne: excludingCompanyId } } : {}),
       })
-      .select('name')
+      .select('_id')
+      .exec();
+  }
+
+  /**
+   * spec 016 FR-010/research R13 — every FUEL company currently SUSPENDED, resolved at
+   * ACTION time (never denormalised onto an offer, which a reinstated company could not
+   * clear). One cheap query, never a `$lookup` inside a keyset-paginated listing.
+   */
+  findSuspendedFuelCompanyIds(): Promise<{ _id: Types.ObjectId }[]> {
+    return this.companyModel
+      .find({ type: CompanyType.FUEL, status: CompanyStatus.SUSPENDED })
+      .select('_id')
+      .lean()
       .exec();
   }
 
@@ -177,12 +203,135 @@ export class CompaniesService {
     return company;
   }
 
+  /**
+   * Replaces the price list, carrying each grade's history forward.
+   *
+   * The write is deliberately NOT a blind `findByIdAndUpdate({ fuelPrices })` any
+   * more: this endpoint receives the WHOLE list on every save (the dashboard sends
+   * all grades back when one is edited), so a naive overwrite would stamp every
+   * grade as "just changed" each time any single one was touched — turning "آخر
+   * تحديث" into "when someone last opened the form" and making every change
+   * percentage 0.00%. History advances per grade, and only where the number
+   * actually moved.
+   *
+   * Read-modify-write on the loaded document rather than an atomic update: the
+   * previous value has to be read to be preserved, and concurrent edits to one
+   * company's prices are a two-administrators-one-form case the platform does not
+   * otherwise guard (`setPricingConfig` above has the same shape).
+   */
   async setFuelPrices(
     id: string,
     fuelPrices: { fuelType: FuelType; basePricePerLiter: number }[],
   ): Promise<CompanyDocument> {
+    const existing = await this.companyModel.findById(id).select('fuelPrices').lean().exec();
+    if (!existing) {
+      throw new NotFoundException('Company not found');
+    }
+    const before = new Map((existing.fuelPrices ?? []).map((p) => [p.fuelType, p]));
+    const now = new Date();
+
+    const next = fuelPrices.map((incoming) => {
+      const prior = before.get(incoming.fuelType);
+      // A grade priced for the FIRST time is not a change — there is nothing it
+      // changed from, so it gets no previous value and no timestamp.
+      if (!prior) return { ...incoming };
+      // Unchanged: keep whatever history it already had, untouched.
+      if (prior.basePricePerLiter === incoming.basePricePerLiter) {
+        return {
+          ...incoming,
+          previousPricePerLiter: prior.previousPricePerLiter,
+          priceChangedAt: prior.priceChangedAt,
+        };
+      }
+      return {
+        ...incoming,
+        previousPricePerLiter: prior.basePricePerLiter,
+        priceChangedAt: now,
+      };
+    });
+
     const company = await this.companyModel
-      .findByIdAndUpdate(id, { fuelPrices }, { new: true })
+      .findByIdAndUpdate(id, { fuelPrices: next }, { new: true })
+      .exec();
+    if (!company) {
+      throw new NotFoundException('Company not found');
+    }
+    return company;
+  }
+
+  /**
+   * Active transporters of `fuelCompanyId` whose `servedRegions` include `regionCode`
+   * (spec 004 FR-014/FR-016).
+   *
+   * Lives here, not in `RoutingService` where it began, because TWO things now depend
+   * on it: routing an approved order, and pricing the delivery before the client ever
+   * confirms. If those two ever answered from different rules, a client could be quoted
+   * one transporter's rate and have the order hauled by another — the exact failure the
+   * quote-time refusal exists to prevent. `RoutingService` delegates here.
+   */
+  findServingTransporters(
+    fuelCompanyId: string | Types.ObjectId,
+    regionCode: RegionCode,
+  ): Promise<CompanyDocument[]> {
+    return this.companyModel
+      .find({
+        type: CompanyType.TRANSPORT,
+        parentFuelCompanyId: fuelCompanyId,
+        status: CompanyStatus.ACTIVE,
+        servedRegions: regionCode,
+      })
+      .exec();
+  }
+
+  /** `[]` when the transporter has priced no area yet — never a fabricated default. */
+  async getDeliveryRates(companyId: string | Types.ObjectId): Promise<DeliveryRate[]> {
+    const company = await this.companyModel
+      .findById(companyId)
+      .select('deliveryRates')
+      .lean()
+      .exec();
+    return company?.deliveryRates ?? [];
+  }
+
+  /**
+   * Replaces a TRANSPORT company's whole rate set, carrying `updatedAt` forward per
+   * area for the ones that did not move — the same discipline `setFuelPrices` above
+   * applies, and for the same reason: the client sends the whole list back when one
+   * area is edited, so a blind overwrite would restamp every area on every save.
+   */
+  async setDeliveryRates(
+    id: string,
+    rates: Omit<DeliveryRate, 'updatedAt'>[],
+  ): Promise<CompanyDocument> {
+    const existing = await this.companyModel
+      .findById(id)
+      .select('deliveryRates type')
+      .lean()
+      .exec();
+    if (!existing) {
+      throw new NotFoundException('Company not found');
+    }
+    // A FUEL company hauls nothing itself; its own delivery charge lives in
+    // `pricingConfig`. Refused here rather than silently stored on a document
+    // nothing would ever read it from.
+    if (existing.type !== CompanyType.TRANSPORT) {
+      throw new BadRequestException('Only a Transportation Company has delivery rates');
+    }
+
+    const keyOf = (r: { regionCode: string; governorateCode?: string }) =>
+      `${r.regionCode}:${r.governorateCode ?? '*'}`;
+    const before = new Map((existing.deliveryRates ?? []).map((r) => [keyOf(r), r]));
+    const now = new Date();
+
+    const next = rates.map((incoming) => {
+      const prior = before.get(keyOf(incoming));
+      const unchanged =
+        prior && prior.pricePerKm === incoming.pricePerKm && prior.minPrice === incoming.minPrice;
+      return { ...incoming, updatedAt: unchanged ? prior.updatedAt : now };
+    });
+
+    const company = await this.companyModel
+      .findByIdAndUpdate(id, { deliveryRates: next }, { new: true })
       .exec();
     if (!company) {
       throw new NotFoundException('Company not found');
@@ -199,14 +348,21 @@ export class CompaniesService {
   async createTransportCompany(
     fuelCompanyId: string,
     data: Omit<Partial<Company>, 'type' | 'parentFuelCompanyId'>,
+    session?: ClientSession,
   ): Promise<CompanyDocument> {
     try {
-      return await this.companyModel.create({
-        ...data,
-        type: CompanyType.TRANSPORT,
-        parentFuelCompanyId: new Types.ObjectId(fuelCompanyId),
-        servedRegions: [],
-      });
+      const [company] = await this.companyModel.create(
+        [
+          {
+            ...data,
+            type: CompanyType.TRANSPORT,
+            parentFuelCompanyId: new Types.ObjectId(fuelCompanyId),
+            servedRegions: [],
+          },
+        ],
+        { session },
+      );
+      return company;
     } catch (error) {
       throw CompaniesService.asConflict(error);
     }

@@ -3,7 +3,7 @@ import { Document, Schema as MongooseSchema, Types } from 'mongoose';
 import { CompanyStatus } from '../../../common/enums/company-status.enum';
 import { CompanyType } from '../../../common/enums/company-type.enum';
 import { FuelType } from '../../../common/enums/fuel-type.enum';
-import { RegionCode } from '../../../common/enums/region.enum';
+import { GovernorateCode, RegionCode } from '../../../common/enums/region.enum';
 
 export type CompanyDocument = Company & Document;
 
@@ -14,6 +14,26 @@ export class FuelPrice {
 
   @Prop({ required: true, min: 0.01 })
   basePricePerLiter!: number;
+
+  /**
+   * The value this grade held before the most recent CHANGE to it, and when that
+   * change happened. Together they are the only source for "آخر تحديث: منذ 5 أيام",
+   * the change percentage, and the مقارنة الأسعار table's "السعر السابق" column —
+   * every one of which feature 013 deleted from the dashboard as fabricated, because
+   * this schema recorded a price and nothing else.
+   *
+   * Both are OPTIONAL and both stay absent until a grade is changed for the first
+   * time: a grade priced once and never revised has no previous value, and inventing
+   * one (0, or the current price, giving a permanent "0.00% لم يتغيّر") would be the
+   * same fabrication in a new place. "Never changed" and "changed by nothing" are
+   * different facts and the API must be able to say which.
+   */
+  @Prop({ min: 0.01 })
+  previousPricePerLiter?: number;
+
+  /** When `basePricePerLiter` last CHANGED — not when the document was last written. */
+  @Prop()
+  priceChangedAt?: Date;
 }
 export const FuelPriceSchema = SchemaFactory.createForClass(FuelPrice);
 
@@ -47,6 +67,48 @@ export class PricingConfig {
   updatedAt!: Date;
 }
 export const PricingConfigSchema = SchemaFactory.createForClass(PricingConfig);
+
+/**
+ * One area a TRANSPORT company hauls into, and what it charges to do so.
+ *
+ * Embedded on `Company` exactly as `fuelPrices` is, and for the same reasons: a
+ * bounded list (13 regions, optionally narrowed to a governorate) that is only ever
+ * read and written as one set, through one company.
+ *
+ * This is the transport price the CLIENT is quoted, not an internal cost — the
+ * transporter sets it, and `PricingService` resolves it through the same
+ * region-serving rule `RoutingService.findServingTransporters` uses to route the
+ * order later, so the price quoted and the transporter eventually routed come from
+ * one rule rather than two that can disagree.
+ *
+ * `minPrice` is a floor, not an alternative: a short haul still costs the
+ * transporter a truck and a driver, and per-km alone prices a 2 km delivery at
+ * almost nothing.
+ */
+@Schema({ _id: false })
+export class DeliveryRate {
+  @Prop({ type: String, required: true, enum: RegionCode })
+  regionCode!: RegionCode;
+
+  /**
+   * Absent means the rate covers the WHOLE region. A governorate-specific rate wins
+   * over its region's (resolution is most-specific-first) — without that, a
+   * transporter could not charge more for one hard-to-reach governorate without
+   * re-pricing everywhere else it serves.
+   */
+  @Prop({ type: String, enum: GovernorateCode })
+  governorateCode?: GovernorateCode;
+
+  @Prop({ required: true, min: 0 })
+  pricePerKm!: number;
+
+  @Prop({ required: true, min: 0 })
+  minPrice!: number;
+
+  @Prop({ required: true, default: Date.now })
+  updatedAt!: Date;
+}
+export const DeliveryRateSchema = SchemaFactory.createForClass(DeliveryRate);
 
 // Companies are the tenant root — NOT scoped by the tenant plugin (there is
 // nothing "above" a company to scope against). CIRO (SUPER_ADMIN) manages
@@ -107,6 +169,14 @@ export class Company {
   // its absence at the pricing boundary, not here).
   @Prop({ type: PricingConfigSchema })
   pricingConfig?: PricingConfig;
+
+  /**
+   * TRANSPORT companies only — a FUEL company hauls nothing itself. Empty by
+   * default: a transporter that has priced no area yet is a real, reportable state
+   * (the order simply cannot be quoted through it), never an implied free delivery.
+   */
+  @Prop({ type: [DeliveryRateSchema], default: [] })
+  deliveryRates!: DeliveryRate[];
 
   @Prop({ required: true })
   contactEmail!: string;

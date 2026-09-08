@@ -18,6 +18,7 @@ import { ErrorCode } from '../../../common/enums/error-code.enum';
 import { OrderStateService } from '../../orders/services/order-state.service';
 import { NotificationsService } from '../../notifications/notifications.service';
 import { NotificationType } from '../../../common/enums/notification-type.enum';
+import { isDuplicateKeyError } from '../../../common/utils/mongo-error.util';
 import { SYSTEM_ACTOR } from '../../../common/constants/system-actor';
 import { TenantContextService } from '../../../common/context/tenant-context.service';
 import { DriverEligibility } from '../../../common/enums/driver-eligibility.enum';
@@ -48,16 +49,6 @@ class ResourceUnavailableError extends Error {
   constructor(readonly resource: CandidateFailure) {
     super(`Resource unavailable: ${resource}`);
   }
-}
-
-// spec 009 FR-008/SC-008: two concurrent `assignDriver` calls on the SAME order, each
-// naming a *different* driver/truck/tank, each pass their own document's
-// `activeOrderId: { $exists: false }` filter under snapshot isolation — the collision
-// only appears at commit, as a duplicate-key violation on the shared unique
-// `activeOrderId` index, never as a clean `findOneAndUpdate` miss. Same discipline as
-// `ratings.service.ts`'s `isDuplicateKeyError`.
-function isDuplicateKeyError(err: unknown): boolean {
-  return typeof err === 'object' && err !== null && (err as { code?: number }).code === 11000;
 }
 
 // The $geoNear aggregate below returns plain objects, not hydrated
@@ -385,6 +376,11 @@ export class DispatchService {
         // the operator-facing refusal it always did.
         failure = err.resource;
       } else if (isDuplicateKeyError(err)) {
+        // spec 009 FR-008/SC-008: two concurrent `assignDriver` calls on the SAME order,
+        // each naming a *different* driver/truck/tank, each pass their own document's
+        // `activeOrderId: { $exists: false }` filter under snapshot isolation — the
+        // collision only appears at commit, as a duplicate-key violation on the shared
+        // unique `activeOrderId` index, never as a clean `findOneAndUpdate` miss.
         throw new ConflictException({
           error: ErrorCode.ORDER_ALREADY_ASSIGNED,
           message:

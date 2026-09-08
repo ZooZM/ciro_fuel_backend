@@ -113,6 +113,10 @@ describe('Pricing breakdown (spec 005 D3/FR-011)', () => {
 
     // Restore for the remaining tests.
     await companyModel.updateOne(
+      { _id: fixtures.companyA.transportCompanyId },
+      { $set: { 'deliveryRates.0.minPrice': 30 } },
+    );
+    await companyModel.updateOne(
       { _id: fixtures.companyA.companyId },
       {
         $set: {
@@ -137,9 +141,15 @@ describe('Pricing breakdown (spec 005 D3/FR-011)', () => {
       .send({ fuelType: 'DIESEL', quantityLiters: 20000, stationId })
       .expect(201);
 
+    // The delivery leg is priced by the TRANSPORT company that performs it, so the
+    // rate that must move to stale a quote is the transporter's — changing the fuel
+    // company's own `pricingConfig.deliveryFee` no longer affects a quote at all
+    // wherever a transporter serves the region, and asserting on it here would have
+    // gone on passing for the wrong reason. `pricePerKm: 0` keeps the fee distance-
+    // independent, so 77 is exactly what the re-quote must come back with.
     await companyModel.updateOne(
-      { _id: fixtures.companyA.companyId },
-      { $set: { 'pricingConfig.deliveryFee': 77 } },
+      { _id: fixtures.companyA.transportCompanyId },
+      { $set: { 'deliveryRates.0.minPrice': 77 } },
     );
 
     const staleRes = await request(server)

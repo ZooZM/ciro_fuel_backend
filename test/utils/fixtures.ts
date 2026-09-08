@@ -157,6 +157,21 @@ async function createCompanyFixture(
   await companiesService.assignRegions(companyId, String(transportCompany._id), [
     RegionCode.RIYADH,
   ]);
+  // The delivery leg is priced by the transporter that performs it, so a transporter
+  // serving a region with NO rate for it now refuses the quote outright
+  // (TRANSPORT_PRICE_NOT_SET) — a configured platform must set one, and so must a
+  // fixture that represents one.
+  //
+  // `pricePerKm: 0` with `minPrice` equal to the fuel company's former
+  // `pricingConfig.deliveryFee` (30) is deliberate: every pre-existing suite that
+  // asserts an exact order total keeps asserting the same numbers, so those
+  // assertions still mean what they meant — while the 30 now travels the new path,
+  // out of the transporter's own rate rather than the fuel company's config. A
+  // distance-dependent fixture rate would have rewritten dozens of expected totals
+  // and told us nothing extra.
+  await companiesService.setDeliveryRates(String(transportCompany._id), [
+    { regionCode: RegionCode.RIYADH, pricePerKm: 0, minPrice: 30 },
+  ]);
   const transportAdminPhone = uniquePhone();
   const transportAdmin = await usersService.create({
     companyId: transportCompany._id as never,
@@ -403,5 +418,106 @@ export async function seedTwoCompanies(app: INestApplication): Promise<TwoCompan
     },
     companyA,
     companyB,
+  };
+}
+
+export interface FuelCompanyOnlyFixture {
+  companyId: string;
+  admin: { id: string; email: string; token: string; phone: string };
+}
+
+export interface ThreeFuelCompanyFixture {
+  superAdmin: { id: string; email: string; token: string; phone: string };
+  /** Sells PETROL_95. */
+  companyA: FuelCompanyOnlyFixture;
+  /** Also sells PETROL_95 — A and B are the pair every proposal/blindness/award test
+   * needs to prove one company's answer is invisible to the OTHER eligible company,
+   * not merely to an ineligible one. */
+  companyB: FuelCompanyOnlyFixture;
+  /** Sells only DIESEL — the company every eligibility/relevance-filter test proves
+   * does NOT see a PETROL_95 market offer. */
+  companyC: FuelCompanyOnlyFixture;
+}
+
+/**
+ * spec 016 (broadcast fuel exchange offers) research R11/T005 — every guarantee this
+ * feature makes is invisible with two companies: blindness needs a SECOND eligible
+ * company whose proposal the first must never see (not just an ineligible third party),
+ * and the grade relevance filter needs a company that genuinely does not sell the
+ * offered grade. Deliberately lighter than {@link createCompanyFixture}: no client,
+ * transporter, driver, truck or tank — nothing this feature's tests exercise reads any
+ * of that, and building three of them would triple fixture setup time for no coverage
+ * gained.
+ */
+async function createFuelCompanyOnly(
+  app: INestApplication,
+  name: string,
+  fuelPrices: { fuelType: FuelType; basePricePerLiter: number }[],
+): Promise<FuelCompanyOnlyFixture> {
+  const companiesService = app.get(CompaniesService);
+  const usersService = app.get(UsersService);
+  const authService = app.get(AuthService);
+
+  const company = await companiesService.create({
+    name,
+    type: CompanyType.FUEL,
+    status: CompanyStatus.ACTIVE,
+    contactEmail: `contact@${name.toLowerCase().replace(/\s+/g, '')}.test`,
+    contactPhone: '+966500000000',
+    fuelPrices,
+  });
+
+  const adminPhone = uniquePhone();
+  const admin = await usersService.create({
+    companyId: company._id as never,
+    role: UserRole.FUEL_COMPANY_ADMIN,
+    email: `admin@${name.toLowerCase().replace(/\s+/g, '')}.test`,
+    password: DEFAULT_PASSWORD,
+    fullName: `${name} Admin`,
+    phone: adminPhone,
+    isActive: true,
+  });
+  const adminAuth = await authService.login({ email: admin.email, password: DEFAULT_PASSWORD });
+
+  return {
+    companyId: String(company._id),
+    admin: { id: String(admin._id), email: admin.email, token: adminAuth.accessToken, phone: adminPhone },
+  };
+}
+
+export async function seedThreeFuelCompanies(app: INestApplication): Promise<ThreeFuelCompanyFixture> {
+  const usersService = app.get(UsersService);
+  const authService = app.get(AuthService);
+
+  const superAdminPhone = uniquePhone();
+  const superAdminUser = await usersService.create({
+    role: UserRole.SUPER_ADMIN,
+    email: 'owner-exchange@platform.test',
+    password: DEFAULT_PASSWORD,
+    fullName: 'Platform Owner',
+    phone: superAdminPhone,
+    isActive: true,
+  });
+  const superAdminAuth = await authService.login({
+    email: superAdminUser.email,
+    password: DEFAULT_PASSWORD,
+  });
+
+  const [companyA, companyB, companyC] = await Promise.all([
+    createFuelCompanyOnly(app, 'ExchangeCoA', [{ fuelType: FuelType.PETROL_95, basePricePerLiter: 2.3 }]),
+    createFuelCompanyOnly(app, 'ExchangeCoB', [{ fuelType: FuelType.PETROL_95, basePricePerLiter: 2.35 }]),
+    createFuelCompanyOnly(app, 'ExchangeCoC', [{ fuelType: FuelType.DIESEL, basePricePerLiter: 2.5 }]),
+  ]);
+
+  return {
+    superAdmin: {
+      id: String(superAdminUser._id),
+      email: superAdminUser.email,
+      token: superAdminAuth.accessToken,
+      phone: superAdminPhone,
+    },
+    companyA,
+    companyB,
+    companyC,
   };
 }

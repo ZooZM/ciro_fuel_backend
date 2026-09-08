@@ -30,6 +30,7 @@ import { SYSTEM_ACTOR } from '../../common/constants/system-actor';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { InvoicesService } from '../invoices/invoices.service';
 import { RoutingService } from '../dispatch/services/routing.service';
+import { isDuplicateKeyError } from '../../common/utils/mongo-error.util';
 
 export interface WebhookResult {
   received: true;
@@ -246,8 +247,4 @@ export class PaymentsService {
       ),
     );
   }
-}
-
-function isDuplicateKeyError(err: unknown): boolean {
-  return typeof err === 'object' && err !== null && (err as { code?: number }).code === 11000;
 }

@@ -13,6 +13,7 @@ import { NotificationType } from '../../../common/enums/notification-type.enum';
 import { User, UserDocument } from '../../users/schemas/user.schema';
 import { UserRole } from '../../../common/enums/user-role.enum';
 import { InvoicesService } from '../../invoices/invoices.service';
+import { CompaniesService } from '../../companies/companies.service';
 
 /**
  * Resolves which Transportation Company(ies) serve a client's region, within
@@ -30,23 +31,21 @@ export class RoutingService {
     private readonly orderStateService: OrderStateService,
     private readonly notificationsService: NotificationsService,
     private readonly invoicesService: InvoicesService,
+    private readonly companiesService: CompaniesService,
   ) {}
 
   /** Active transporters of `fuelCompanyId` whose `servedRegions` include
    * `regionCode`. Empty → FR-016 (no coverage); more than one → FR-014
-   * (Fuel Company must choose). */
+   * (Fuel Company must choose).
+   *
+   * Delegates to `CompaniesService`: `PricingService` now resolves the delivery
+   * price through this same rule at quote time, and two copies of it would be two
+   * places for the answer to drift. */
   findServingTransporters(
     fuelCompanyId: string | Types.ObjectId,
     regionCode: RegionCode,
   ): Promise<CompanyDocument[]> {
-    return this.companyModel
-      .find({
-        type: CompanyType.TRANSPORT,
-        parentFuelCompanyId: fuelCompanyId,
-        status: CompanyStatus.ACTIVE,
-        servedRegions: regionCode,
-      })
-      .exec();
+    return this.companiesService.findServingTransporters(fuelCompanyId, regionCode);
   }
 
   /**

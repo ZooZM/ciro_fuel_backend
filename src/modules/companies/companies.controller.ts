@@ -15,6 +15,8 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
+import { InjectConnection } from '@nestjs/mongoose';
+import { Connection } from 'mongoose';
 import { CompaniesService } from './companies.service';
 import { CompanyDocument } from './schemas/company.schema';
 import { UsersService } from '../users/users.service';
@@ -27,6 +29,7 @@ import { AssignRegionsDto } from './dto/assign-regions.dto';
 import { UpdateCompanyStatusDto } from './dto/update-company-status.dto';
 import { SetFuelPricesDto } from './dto/set-fuel-prices.dto';
 import { SetPricingConfigDto } from './dto/set-pricing-config.dto';
+import { SetDeliveryRatesDto } from './dto/set-delivery-rates.dto';
 import { SetCommissionCeilingDto } from './dto/set-commission-ceiling.dto';
 import { ErrorCode } from '../../common/enums/error-code.enum';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -36,6 +39,7 @@ import { CompanyStatus } from '../../common/enums/company-status.enum';
 import { CompanyType } from '../../common/enums/company-type.enum';
 import { AuthenticatedUser } from '../../common/interfaces/jwt-payload.interface';
 import { ObjectIdPipe } from '../../common/pipes/object-id.pipe';
+import { governorateBelongsToRegion } from '../regions/regions.constants';
 
 @Controller({ path: 'companies', version: '1' })
 export class CompaniesController {
@@ -43,6 +47,7 @@ export class CompaniesController {
     private readonly companiesService: CompaniesService,
     private readonly usersService: UsersService,
     private readonly filesService: FilesService,
+    @InjectConnection() private readonly connection: Connection,
   ) {}
 
   @Roles(UserRole.SUPER_ADMIN)
@@ -67,14 +72,50 @@ export class CompaniesController {
     // This endpoint predates the multi-tier hierarchy (feature 001) and has
     // always created what is now unambiguously a Fuel Company — the sole
     // tenant root that owns pricing, clients and transporters.
-    const company = await this.companiesService.create({
-      name: dto.name,
-      type: CompanyType.FUEL,
-      contactEmail: dto.contactEmail,
-      contactPhone: dto.contactPhone,
-      status: CompanyStatus.ACTIVE,
-      fuelPrices: [],
-    });
+    //
+    // Company and admin are one unit of work, for the same reason as
+    // `createTransporter` below: a duplicate admin email or phone used to leave
+    // a committed, admin-less company squatting a platform-unique name.
+    //
+    // The commercial register is deliberately handled AFTER the commit. Its blob
+    // goes to object storage, which no Mongo transaction can roll back — writing
+    // it inside would leak an unreferenced object on exactly the failures this
+    // transaction exists to undo. Ordered this way, a failed onboard writes no
+    // blob at all, and a file failure afterwards leaves a usable company whose
+    // register can simply be re-uploaded.
+    const session = await this.connection.startSession();
+    let company!: CompanyDocument;
+    let admin!: Awaited<ReturnType<UsersService['create']>>;
+    try {
+      await session.withTransaction(async () => {
+        company = await this.companiesService.create(
+          {
+            name: dto.name,
+            type: CompanyType.FUEL,
+            contactEmail: dto.contactEmail,
+            contactPhone: dto.contactPhone,
+            status: CompanyStatus.ACTIVE,
+            fuelPrices: [],
+          },
+          session,
+        );
+
+        admin = await this.usersService.create(
+          {
+            companyId: company._id as never,
+            role: UserRole.FUEL_COMPANY_ADMIN,
+            email: dto.adminEmail,
+            password: dto.adminPassword,
+            fullName: dto.adminFullName,
+            phone: dto.adminPhone,
+            isActive: true,
+          },
+          session,
+        );
+      });
+    } finally {
+      await session.endSession();
+    }
 
     if (commercialRegister) {
       // spec 012 T063: `writeBufferAndRecord` and `recordUpload` collapsed into
@@ -94,16 +135,6 @@ export class CompaniesController {
         fileRecord._id as never,
       );
     }
-
-    const admin = await this.usersService.create({
-      companyId: company._id as never,
-      role: UserRole.FUEL_COMPANY_ADMIN,
-      email: dto.adminEmail,
-      password: dto.adminPassword,
-      fullName: dto.adminFullName,
-      phone: dto.adminPhone,
-      isActive: true,
-    });
 
     return {
       company: await this.companiesService.findById(String(company._id)),
@@ -128,16 +159,6 @@ export class CompaniesController {
       throw new UnauthorizedException('Invalid credentials');
     }
     return this.companiesService.findAll(user.companyId);
-  }
-
-  // Registered BEFORE `:id` — a literal path segment would otherwise be swallowed by
-  // the param route and fail `ObjectIdPipe`. spec 013 Phase 15 (US12): the only way a
-  // fuel company can discover a fuel-exchange counterparty (see `findExchangePartners`'s
-  // own doc comment for why `GET /companies` itself cannot serve this).
-  @Roles(UserRole.FUEL_COMPANY_ADMIN)
-  @Get('exchange-partners')
-  findExchangePartners(@CurrentUser() user: AuthenticatedUser) {
-    return this.companiesService.findExchangePartners(user.companyId!);
   }
 
   @Get(':id')
@@ -217,6 +238,63 @@ export class CompaniesController {
   // spec 013 FR-033, T086a — genuine platform addition (found during analysis: `create`
   // below existed with no listing counterpart). `:id` is the acting admin's own Fuel
   // Company; `assertCompanyAccess` stops FuelCo A's admin from listing FuelCo B's fleet.
+  /**
+   * The transport price a TRANSPORT company charges per area — what the client is
+   * quoted for delivery, set by the transporter itself.
+   *
+   * Read uses `assertCompanyReadAccess`, not the strict self-only check: the parent
+   * FUEL company must be able to see the rates its own clients are quoted (that helper
+   * already admits exactly a fuel admin reading its own transporter, and nobody else's).
+   */
+  @Get(':id/delivery-rates')
+  async getDeliveryRates(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ObjectIdPipe) id: string,
+  ) {
+    const company = await this.companiesService.findById(id);
+    await this.assertCompanyReadAccess(user, company);
+    return this.companiesService.getDeliveryRates(id);
+  }
+
+  /**
+   * Write is TRANSPORT_COMPANY_ADMIN and self-only — a fuel company may READ what its
+   * transporter charges but may never set it, which is the whole point of moving this
+   * price to the party that performs the haul.
+   */
+  @Roles(UserRole.TRANSPORT_COMPANY_ADMIN)
+  @Put(':id/delivery-rates')
+  async setDeliveryRates(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ObjectIdPipe) id: string,
+    @Body() dto: SetDeliveryRatesDto,
+  ) {
+    this.assertCompanyAccess(user, id);
+
+    // Checked here, against `regions.constants.ts`, exactly as CreateUserDto's station
+    // pairing is (users.controller.ts) — the mapping is data, not decorators.
+    for (const rate of dto.rates) {
+      if (rate.governorateCode && !governorateBelongsToRegion(rate.governorateCode, rate.regionCode)) {
+        throw new BadRequestException('governorateCode does not belong to regionCode');
+      }
+    }
+
+    // Two entries for one area would make resolution order-dependent — the quote would
+    // depend on which happened to be stored first, which is exactly the kind of silent
+    // ambiguity a price must never have.
+    const keys = dto.rates.map((r) => `${r.regionCode}:${r.governorateCode ?? '*'}`);
+    if (new Set(keys).size !== keys.length) {
+      throw new BadRequestException('Duplicate area in delivery rates');
+    }
+
+    // The RATES, not the company. `setDeliveryRates` returns the whole updated document,
+    // so returning it directly made this endpoint answer with `contactEmail`,
+    // `contactPhone`, `parentFuelCompanyId` and `fuelPrices` — none of which a caller
+    // asked for — while its own GET twin correctly answers with the array alone. Matches
+    // `setPricingConfig` above, which narrows to `company.pricingConfig` for this reason.
+    const company = await this.companiesService.setDeliveryRates(id, dto.rates);
+    return company.deliveryRates;
+  }
+
   @Roles(UserRole.FUEL_COMPANY_ADMIN)
   @Get(':id/transporters')
   async listTransporters(@CurrentUser() user: AuthenticatedUser, @Param('id', ObjectIdPipe) id: string) {
@@ -236,33 +314,59 @@ export class CompaniesController {
   ) {
     this.assertCompanyAccess(user, id);
 
-    const transporter = await this.companiesService.createTransportCompany(id, {
-      name: dto.name,
-      contactEmail: dto.contactEmail,
-      contactPhone: dto.contactPhone,
-      status: CompanyStatus.ACTIVE,
-    });
+    // The company and its admin are ONE unit of work (Principle V). Created
+    // separately, a duplicate admin email or phone — a 409 the operator hits
+    // routinely, since both are unique platform-wide — left the company row
+    // already committed, with no admin and no way to ever sign in to it. The
+    // name is unique too, so every retry then failed on the ORPHAN rather than
+    // on the thing the operator got wrong, reporting a name collision they had
+    // no way to explain. Rolling the company back is what makes the retry the
+    // operator's obvious next move actually work.
+    const session = await this.connection.startSession();
+    let transporter!: CompanyDocument;
+    let admin!: Awaited<ReturnType<UsersService['create']>>;
+    try {
+      await session.withTransaction(async () => {
+        transporter = await this.companiesService.createTransportCompany(
+          id,
+          {
+            name: dto.name,
+            contactEmail: dto.contactEmail,
+            contactPhone: dto.contactPhone,
+            status: CompanyStatus.ACTIVE,
+          },
+          session,
+        );
 
-    let admin = await this.usersService.create({
-      companyId: transporter._id as never,
-      role: UserRole.TRANSPORT_COMPANY_ADMIN,
-      email: dto.adminEmail,
-      password: dto.adminPassword,
-      fullName: dto.adminFullName,
-      phone: dto.adminPhone,
-      isActive: true,
-    });
-    // `User` is tenant-scoped (Principle II): the plugin's `pre('save')` hook
-    // unconditionally overwrites a new document's companyId with the ACTING
-    // user's own tenant — correct for every same-tenant create, but this is
-    // deliberately cross-tenant (a Fuel Company admin creating an account
-    // that belongs to the *new transporter*, not to themselves). The insert
-    // above lands with companyId = the fuel company's id despite what was
-    // passed; this corrects it. The correcting update is not itself
-    // re-clobbered — the hook only forces companyId on `isNew` documents.
-    admin = await this.usersService.update(String(admin._id), {
-      companyId: transporter._id as never,
-    });
+        admin = await this.usersService.create(
+          {
+            companyId: transporter._id as never,
+            role: UserRole.TRANSPORT_COMPANY_ADMIN,
+            email: dto.adminEmail,
+            password: dto.adminPassword,
+            fullName: dto.adminFullName,
+            phone: dto.adminPhone,
+            isActive: true,
+          },
+          session,
+        );
+        // `User` is tenant-scoped (Principle II): the plugin's `pre('save')` hook
+        // unconditionally overwrites a new document's companyId with the ACTING
+        // user's own tenant — correct for every same-tenant create, but this is
+        // deliberately cross-tenant (a Fuel Company admin creating an account
+        // that belongs to the *new transporter*, not to themselves). The insert
+        // above lands with companyId = the fuel company's id despite what was
+        // passed; this corrects it. The correcting update is not itself
+        // re-clobbered — the hook only forces companyId on `isNew` documents.
+        admin = await this.usersService.update(
+          String(admin._id),
+          { companyId: transporter._id as never },
+          session,
+        );
+      });
+    } finally {
+      await session.endSession();
+    }
 
     return {
       company: transporter,

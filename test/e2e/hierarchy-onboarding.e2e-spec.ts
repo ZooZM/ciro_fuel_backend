@@ -2,8 +2,14 @@ import request from 'supertest';
 import { INestApplication } from '@nestjs/common';
 import { getModelToken } from '@nestjs/mongoose';
 import { createTestApp, TestAppContext } from '../utils/test-app.factory';
-import { DEFAULT_PASSWORD, seedTwoCompanies, TwoCompanyFixture } from '../utils/fixtures';
+import {
+  DEFAULT_PASSWORD,
+  seedTwoCompanies,
+  TwoCompanyFixture,
+  uniquePhone,
+} from '../utils/fixtures';
 import { User } from '../../src/modules/users/schemas/user.schema';
+import { Company } from '../../src/modules/companies/schemas/company.schema';
 
 jest.setTimeout(120_000);
 
@@ -115,6 +121,72 @@ describe('Hierarchy onboarding (spec 004 US1) — CIRO creates an isolated Fuel 
       .set('Authorization', `Bearer ${fixtures.companyA.admin.token}`)
       .send({ status: 'SUSPENDED' })
       .expect(403);
+  });
+
+  // --- Onboarding is atomic: company + admin, or neither -------------------
+  //
+  // Both endpoints created the company first and its admin second, with nothing
+  // tying them together. A duplicate admin email or phone — a 409 an operator
+  // hits routinely, since both are unique platform-wide — therefore left the
+  // company row committed with no admin and no way to ever sign in to it. Worse,
+  // `name` is unique too, so the operator's obvious next move (retry, fixing the
+  // email) then failed on the ORPHAN with a name collision they had no way to
+  // explain. Neither case had a test, which is why it shipped.
+
+  it('rolls the whole transporter back when its admin cannot be created, leaving the name free to retry', async () => {
+    const server = app.getHttpServer();
+    const companyModel = app.get(getModelToken(Company.name));
+    const name = 'Rollback Test Transporter';
+    const payload = {
+      name,
+      contactEmail: 'contact@rollbacktransporter.test',
+      contactPhone: uniquePhone(),
+      adminFullName: 'Rollback Transport Admin',
+      adminPassword: DEFAULT_PASSWORD,
+    };
+
+    // This email already belongs to companyA's client, so the admin insert fails
+    // AFTER the company insert has already happened inside the transaction.
+    await request(server)
+      .post(`/api/v1/companies/${fixtures.companyA.companyId}/transporters`)
+      .set('Authorization', `Bearer ${fixtures.companyA.admin.token}`)
+      .send({ ...payload, adminEmail: fixtures.companyA.client.email, adminPhone: uniquePhone() })
+      .expect(409);
+
+    expect(await companyModel.countDocuments({ name })).toBe(0);
+
+    // The retry is the actual guarantee: same name, corrected email.
+    await request(server)
+      .post(`/api/v1/companies/${fixtures.companyA.companyId}/transporters`)
+      .set('Authorization', `Bearer ${fixtures.companyA.admin.token}`)
+      .send({
+        ...payload,
+        adminEmail: 'admin@rollbacktransporter.test',
+        adminPhone: uniquePhone(),
+      })
+      .expect(201);
+  });
+
+  it('rolls the whole fuel company back when its admin cannot be created, leaving the name free to retry', async () => {
+    const server = app.getHttpServer();
+    const companyModel = app.get(getModelToken(Company.name));
+    const name = 'Rollback Test Fuel Co';
+
+    const send = (adminEmail: string) =>
+      request(server)
+        .post('/api/v1/companies')
+        .set('Authorization', `Bearer ${fixtures.superAdmin.token}`)
+        .field('name', name)
+        .field('contactEmail', 'contact@rollbackfuel.test')
+        .field('contactPhone', uniquePhone())
+        .field('adminEmail', adminEmail)
+        .field('adminFullName', 'Rollback Fuel Admin')
+        .field('adminPhone', uniquePhone())
+        .field('adminPassword', DEFAULT_PASSWORD);
+
+    await send(fixtures.companyA.client.email).expect(409);
+    expect(await companyModel.countDocuments({ name })).toBe(0);
+    await send('admin@rollbackfuel.test').expect(201);
   });
 
   // --- Spec 004 FR-005 / plan.md §1: fails closed, never runs unscoped ----

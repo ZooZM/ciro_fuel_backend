@@ -120,7 +120,7 @@ export enum ErrorCode {
   // typically a second click, or two administrators on the same alert.
   STOP_ALREADY_RESOLVED = 'STOP_ALREADY_RESOLVED',
 
-  // spec 013 (fuel company admin dashboard — live platform integration)
+  // spec 014 (fuel company admin dashboard — live platform integration)
   // A credit-limit-request resolution attempted after it already carries an
   // outcome (FR-031). Conditional-update discipline, same as ORDER_ALREADY_ASSIGNED
   // — the filter names the expected PENDING state, and `modifiedCount` (not a
@@ -195,4 +195,54 @@ export enum ErrorCode {
   // invalid, expired or replayed response is refused with this same code and
   // a FRESH seed.
   CHALLENGE_REQUIRED = 'CHALLENGE_REQUIRED',
+  // 404, and ONLY when `loginOtp.revealUnknownPhone` is explicitly enabled.
+  // It states outright that a number belongs to no administrator, which is
+  // precisely what FR-015's constant 202 exists to withhold: with this on, the
+  // endpoint is an oracle for "is this mobile number a platform administrator",
+  // the targeting step before SIM-swap or phishing. Off by default, and off is
+  // the only setting under which FR-015 holds.
+  PHONE_NOT_REGISTERED = 'PHONE_NOT_REGISTERED',
+
+  // ── delivery pricing moved to the party that performs the haul ────────────
+  // 409. A transporter serves the client's region but has priced no area
+  // covering it, so there is no transport price to quote. Deliberately NOT
+  // satisfied by falling back to the fuel company's own `pricingConfig.deliveryFee`:
+  // that figure is what the fuel company used to charge, and quoting it while a
+  // transporter is the one who will haul (and bill) would put a number in front of
+  // the client that nobody stands behind.
+  TRANSPORT_PRICE_NOT_SET = 'TRANSPORT_PRICE_NOT_SET',
+  // 409. MORE THAN ONE transporter serves the region and their rates for this area
+  // disagree. Which one hauls is the fuel company's choice at routing (FR-014) —
+  // made AFTER the invoice is issued — so at quote time the price is genuinely
+  // undetermined. Picking the cheapest would quote a client a price the actual
+  // hauler never agreed to; picking the dearest would overcharge. The platform
+  // refuses, exactly as PRICING_NOT_CONFIGURED refuses rather than assuming zeros.
+  // Note this fires only when the resulting FEES differ: several transporters that
+  // agree on the price present no ambiguity and are quoted normally.
+  TRANSPORT_PRICE_AMBIGUOUS = 'TRANSPORT_PRICE_AMBIGUOUS',
+
+  // spec 016 (broadcast fuel exchange offers)
+  // No fuel company on the platform (other than the raiser) sells the named
+  // grade (FR-005). Refused at raise time, before any offer is created —
+  // there would be no one for it to ever reach.
+  EXCHANGE_NO_ELIGIBLE_COMPANY = 'EXCHANGE_NO_ELIGIBLE_COMPANY',
+  // This company already proposed or declined this offer (FR-011c) — the
+  // response to both a genuine second answer and a duplicate submission,
+  // translated from the unique `(offerId, proposingCompanyId)` index
+  // violation, never from a prior existence check two concurrent
+  // submissions could both pass identically.
+  EXCHANGE_ALREADY_ANSWERED = 'EXCHANGE_ALREADY_ANSWERED',
+  // Proposing on an offer that is not OPEN — already awarded, withdrawn, or
+  // its raising company is suspended (FR-010, research R13). Award and
+  // withdraw reuse the platform's existing EXCHANGE_ALREADY_RESOLVED for the
+  // same shape of refusal (contracts/rest-api-delta.md).
+  EXCHANGE_OFFER_NOT_OPEN = 'EXCHANGE_OFFER_NOT_OPEN',
+  // 400. `deliveryAt` was already in the past at raise time (spec Assumptions:
+  // the rule binds CREATION only — a date passing later makes an existing offer
+  // stale, never invalid, which is why this is not a DTO constraint). Carries a
+  // code rather than the bare string it threw before so a client can state the
+  // refusal in the operator's own language: every other refusal on this endpoint
+  // is code-addressable, and a lone untranslatable message is the one a dashboard
+  // has no choice but to show in English or bury under a generic error.
+  EXCHANGE_DELIVERY_IN_PAST = 'EXCHANGE_DELIVERY_IN_PAST',
 }

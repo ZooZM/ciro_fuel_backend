@@ -8,7 +8,7 @@ import { UserRole } from '../../src/common/enums/user-role.enum';
 jest.setTimeout(60_000);
 
 /**
- * spec 013 T216/Part A (built and reviewed ALONE, before any exchange domain code —
+ * spec 014 T216/Part A (built and reviewed ALONE, before any exchange domain code —
  * T217's gate). Mirrors `multi-party-scope.plugin.spec.ts`'s own testing shape.
  */
 describe('partySetScopePlugin', () => {

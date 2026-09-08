@@ -36,4 +36,22 @@ export enum NotificationType {
   // degrades to the existing "unknown" fallback, the same graceful-degradation
   // path every other unrecognised type already has.
   CREDIT_LIMIT_REQUEST_RESOLVED = 'CREDIT_LIMIT_REQUEST_RESOLVED',
+
+  // spec 016 (broadcast fuel exchange offers) — every recipient of these four is a
+  // FUEL_COMPANY_ADMIN, so every one is a DASHBOARD notification (research R6). The
+  // dashboard is admin-only and no mobile persona ever raises or answers an offer; no
+  // mobile surface renders these, and none should be designed for.
+  //
+  // To every eligible fuel company's administrators when a new offer reaches the
+  // market (FR-029). Payload carries `offerId`.
+  EXCHANGE_OFFER_AVAILABLE = 'EXCHANGE_OFFER_AVAILABLE',
+  // To the raising company's administrators when a recipient proposes or declines
+  // (FR-030). Payload carries `offerId`.
+  EXCHANGE_PROPOSAL_RECEIVED = 'EXCHANGE_PROPOSAL_RECEIVED',
+  // To the WINNING company alone, on award. Payload carries `offerId`.
+  EXCHANGE_OFFER_AWARDED = 'EXCHANGE_OFFER_AWARDED',
+  // To every OTHER company that had proposed, on award, and to every company that had
+  // proposed, on withdrawal (FR-016, FR-030a, FR-031). Deliberately carries NO company
+  // name and NO price — a non-winner learns only that the offer closed.
+  EXCHANGE_OFFER_CLOSED = 'EXCHANGE_OFFER_CLOSED',
 }

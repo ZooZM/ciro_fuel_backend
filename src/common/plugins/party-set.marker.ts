@@ -7,7 +7,7 @@ const PARTY_SET_KEY = 'partySet';
 type LooseSchema = { set(key: string, value: unknown): void; get(key: string): unknown };
 
 /**
- * spec 013 T209/research R3, `contracts/isolation-contract.md` — marks a schema as
+ * spec 014 T209/research R3, `contracts/isolation-contract.md` — marks a schema as
  * party-set: the record is owned by an ARRAY of companies, not one (`tenant-scope
  * .plugin.ts`) and not one-plus-role-narrowed-others (`multi-party-scope.plugin.ts`).
  * `ExchangeRequest` is the only collection this applies to in this feature — see the

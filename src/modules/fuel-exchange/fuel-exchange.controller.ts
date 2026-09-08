@@ -1,82 +1,96 @@
-import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, HttpCode, Param, Patch, Post, Query } from '@nestjs/common';
 import { FuelExchangeService, ExchangeDirection } from './fuel-exchange.service';
-import { CompaniesService } from '../companies/companies.service';
-import { CreateExchangeRequestDto } from './dto/create-exchange-request.dto';
-import { RespondExchangeRequestDto } from './dto/respond-exchange-request.dto';
+import { CreateOfferDto } from './dto/create-offer.dto';
+import { CreateProposalDto } from './dto/create-proposal.dto';
+import { AwardOfferDto } from './dto/award-offer.dto';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { AuthenticatedUser } from '../../common/interfaces/jwt-payload.interface';
 import { ObjectIdPipe } from '../../common/pipes/object-id.pipe';
+import { ExchangeOfferState } from '../../common/enums/exchange-offer-state.enum';
 
 const VALID_DIRECTIONS: ExchangeDirection[] = ['incoming', 'outgoing', 'all'];
 
-@Controller({ path: 'fuel-exchange/requests', version: '1' })
+/**
+ * spec 016 (broadcast fuel exchange offers) — replaces spec 014's directed
+ * `/fuel-exchange/requests` surface entirely (FR-040): no recipient is ever named, no
+ * price is ever set by the raiser, and every write route admits `FUEL_COMPANY_ADMIN`
+ * alone — `SUPER_ADMIN` reads everything and acts on nothing (FR-023), enforced here by
+ * simply never naming it on a write route's `@Roles`, the same discipline the removed
+ * controller already used for create/respond/withdraw.
+ */
+@Controller({ path: 'fuel-exchange/offers', version: '1' })
 export class FuelExchangeController {
-  constructor(
-    private readonly fuelExchangeService: FuelExchangeService,
-    private readonly companiesService: CompaniesService,
-  ) {}
+  constructor(private readonly fuelExchangeService: FuelExchangeService) {}
 
   @Roles(UserRole.FUEL_COMPANY_ADMIN)
   @Post()
-  create(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreateExchangeRequestDto) {
+  create(@CurrentUser() user: AuthenticatedUser, @Body() dto: CreateOfferDto) {
     return this.fuelExchangeService.create(user.companyId!, user.userId, dto);
+  }
+
+  // Registered BEFORE `:id` — a literal path segment is otherwise swallowed by the
+  // param route and fails `ObjectIdPipe` (the trap `GET /companies/exchange-partners`
+  // already documented, T093).
+  @Roles(UserRole.FUEL_COMPANY_ADMIN)
+  @Get('summary')
+  summary(@CurrentUser() user: AuthenticatedUser) {
+    return this.fuelExchangeService.summary(user.companyId!);
   }
 
   @Roles(UserRole.FUEL_COMPANY_ADMIN, UserRole.SUPER_ADMIN)
   @Get()
-  findMine(
+  findAll(
     @CurrentUser() user: AuthenticatedUser,
     @Query('direction') direction: string = 'all',
+    @Query('state') state?: string,
     @Query('cursor') cursor?: string,
   ) {
     if (!VALID_DIRECTIONS.includes(direction as ExchangeDirection)) {
       throw new BadRequestException('direction must be one of incoming, outgoing, all');
     }
-    // SUPER_ADMIN bypasses the party-set plugin entirely (contract's bypass row) — every
-    // request, from every company. `direction` is meaningless for an actor with no
-    // company of their own, so it is ignored rather than built into a filter that would
-    // try to construct an ObjectId from an absent companyId.
-    if (user.role === UserRole.SUPER_ADMIN) {
-      return this.fuelExchangeService.findForUser('', 'all', cursor || undefined);
+    if (state && !Object.values(ExchangeOfferState).includes(state as ExchangeOfferState)) {
+      throw new BadRequestException('state is not a recognised exchange offer state');
     }
-    return this.fuelExchangeService.findForUser(
+    if (user.role === UserRole.SUPER_ADMIN) {
+      return this.fuelExchangeService.findAllForOperator(cursor || undefined);
+    }
+    return this.fuelExchangeService.findAll(
       user.companyId!,
       direction as ExchangeDirection,
+      state as ExchangeOfferState | undefined,
       cursor || undefined,
     );
   }
 
-  /** T223/FR-086b — the counterparty's contact details, resolved server-side from
-   * whichever party is NOT the caller. Disclosed only because the party-set plugin's own
-   * scoping already proved the caller is one of the two parties before this runs. */
   @Roles(UserRole.FUEL_COMPANY_ADMIN, UserRole.SUPER_ADMIN)
   @Get(':id')
-  async findOne(@CurrentUser() user: AuthenticatedUser, @Param('id', ObjectIdPipe) id: string) {
-    const request = await this.fuelExchangeService.findById(id);
-    const counterpartyId =
-      String(request.raisedByCompanyId) === user.companyId ? request.recipientCompanyId : request.raisedByCompanyId;
-    const counterparty = await this.companiesService.findById(counterpartyId);
-    return {
-      ...request.toObject(),
-      counterparty: {
-        _id: counterparty._id,
-        name: counterparty.name,
-        contactEmail: counterparty.contactEmail,
-        contactPhone: counterparty.contactPhone,
-      },
-    };
+  findOne(@CurrentUser() user: AuthenticatedUser, @Param('id', ObjectIdPipe) id: string) {
+    return this.fuelExchangeService.findOne(id, user.companyId, user.role);
   }
 
   @Roles(UserRole.FUEL_COMPANY_ADMIN)
-  @Patch(':id/respond')
-  respond(
+  @Post(':id/proposals')
+  propose(
     @CurrentUser() user: AuthenticatedUser,
     @Param('id', ObjectIdPipe) id: string,
-    @Body() dto: RespondExchangeRequestDto,
+    @Body() dto: CreateProposalDto,
   ) {
-    return this.fuelExchangeService.respond(id, user.companyId!, user.userId, dto.accept);
+    return this.fuelExchangeService.propose(id, user.companyId!, user.userId, dto);
+  }
+
+  // 200, not the `@Post` default 201 — this resolves an EXISTING offer rather than
+  // creating a new resource (contracts/rest-api-delta.md).
+  @Roles(UserRole.FUEL_COMPANY_ADMIN)
+  @Post(':id/award')
+  @HttpCode(200)
+  award(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ObjectIdPipe) id: string,
+    @Body() dto: AwardOfferDto,
+  ) {
+    return this.fuelExchangeService.award(id, user.companyId!, user.userId, dto.proposalId);
   }
 
   @Roles(UserRole.FUEL_COMPANY_ADMIN)

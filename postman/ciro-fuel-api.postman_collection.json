@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "c1r0-fu3l-4p1-c0113ct10n-0001",
     "name": "Ciro Fuel Delivery Platform API",
-    "description": "Multi-tenant B2B fuel delivery platform — REST API (`/api/v1`). Mirrors `specs/001-fuel-delivery-platform/contracts/rest-api.md` and `scripts/smoke.http`.\n\n## How to run\n1. Import the companion environment `ciro-fuel-local.postman_environment.json` (or edit the collection variables directly) and point `baseUrl` at your running server.\n2. Make sure the platform owner is seeded: `npm run seed:super-admin` (uses `SUPER_ADMIN_EMAIL` / `SUPER_ADMIN_PASSWORD` from `.env`) — update the `superAdminEmail` / `superAdminPassword` variables to match.\n3. Run the **Auth → Login – Super Admin** request first.\n4. Run **Companies → Create Company** (`commercialRegister` is optional — attach a small PDF/image if you want to test it) — this seeds a Fuel Company Admin too. Then **Companies → Set Fuel Prices** (order creation 400s without it).\n5. Run **Auth → Login – Fuel Admin**, then **Users → Create Client** and **Companies → Create Transporter** — a Transportation Company is a separate tenant, spec 004; a driver belongs to it, not to the fuel company.\n6. Run **Companies → Assign Regions** so the transporter actually serves the client's region, or approval will park the order at `AWAITING_ROUTING` with no candidates. Then **Users → Create Driver** (under the transport company) and **Auth → Login – Transport Admin**.\n7. Run **Auth → Login – Client** / **Auth → Login – Driver** — these sign in with `phone`, not email (see the note below).\n8. spec 008 fleet setup, once per transporter: **Trucks → Create Truck** + **Pair NFC Card** (or **Mint QR Token**), and **Tanks → Create Tank**. **Warehouses → Create Warehouse** (SUPER_ADMIN) near the delivery coordinates you'll use — **Dispatch → Assign Driver** fails with `NO_WAREHOUSE_FOR_GRADE` without one that supplies the order's grade.\n9. Walk the **Orders** folder top to bottom for the full lifecycle: create → approve → pay (**Payments → Webhook – Sadad**, if `DIRECT`) → **Dispatch → Get Candidates**/**Assign Driver** → **Verify Vehicle – Departure** → **Verify Vehicle – Loading (Geofenced)** → **Confirm Loading** → **Driver Arrive** → **Get Current OTP** (as CLIENT) → **Verify Arrival OTP** → **Request Delivery OTP** → **Get Current OTP** again → **Verify Delivery OTP**.\n\n## Login identifiers\n`POST /auth/login` takes **one** of two identifiers:\n\n| Role | Identifier | Variable |\n|------|-----------|----------|\n| SUPER_ADMIN, COMPANY_ADMIN | `email` | `superAdminEmail`, `companyAdminEmail` |\n| CLIENT, DRIVER | `phone` (E.164, e.g. `+9665XXXXXXX`) | `clientPhone`, `driverPhone` |\n\nA CLIENT/DRIVER phone is unique platform-wide because it *is* their credential: creating or updating a user with a non-E.164 phone returns `400`, and reusing one returns `409`. Admin phones are never resolved at login, so sending an admin's phone returns `401`.\n\nEach login request captures its token into a role-specific variable (`accessTokenSuperAdmin`, `accessTokenCompanyAdmin`, `accessTokenClient`, `accessTokenDriver`) plus a generic `accessToken`/`refreshToken` pair (whichever logged in most recently). Requests use the role-specific variable that actually owns that route, so folders can be run out of order as long as the relevant login already ran once.\n\nCross-tenant or wrong-role access returns `404`/`403` per `rest-api.md` — that's expected, not a bug, if you mix up which token a request uses.",
+    "description": "Multi-tenant B2B fuel delivery platform — REST API (`/api/v1`). Mirrors `specs/001-fuel-delivery-platform/contracts/rest-api.md` and `scripts/smoke.http`.\n\n## How to run\n1. Import the companion environment `ciro-fuel-local.postman_environment.json` (or edit the collection variables directly) and point `baseUrl` at your running server.\n2. Make sure the platform owner is seeded: `npm run seed:super-admin` (uses `SUPER_ADMIN_EMAIL` / `SUPER_ADMIN_PASSWORD` from `.env`) — update the `superAdminEmail` / `superAdminPassword` variables to match.\n3. Run the **Auth → Login – Super Admin** request first.\n4. Run **Companies → Create Company** (`commercialRegister` is optional — attach a small PDF/image if you want to test it) — this seeds a Fuel Company Admin too. Then **Companies → Set Fuel Prices** (order creation 400s without it).\n5. Run **Auth → Login – Fuel Admin**, then **Users → Create Client** and **Companies → Create Transporter** — a Transportation Company is a separate tenant, spec 004; a driver belongs to it, not to the fuel company.\n6. Run **Companies → Assign Regions** so the transporter actually serves the client's region, or approval will park the order at `AWAITING_ROUTING` with no candidates. Then **Users → Create Driver** (under the transport company) and **Auth → Login – Transport Admin**.\n7. Run **Auth → Login – Client** / **Auth → Login – Driver** — these sign in with `phone`, not email (see the note below).\n8. spec 008 fleet setup, once per transporter: **Trucks → Create Truck** + **Pair NFC Card** (or **Mint QR Token**), and **Tanks → Create Tank**. **Warehouses → Create Warehouse** (SUPER_ADMIN) near the delivery coordinates you'll use — **Dispatch → Assign Driver** fails with `NO_WAREHOUSE_FOR_GRADE` without one that supplies the order's grade.\n9. Walk the **Orders** folder top to bottom for the full lifecycle: create → approve → pay (**Payments → Webhook – Sadad**, if `DIRECT`) → **Dispatch → Get Candidates**/**Assign Driver** → **Verify Vehicle – Departure** → **Verify Vehicle – Loading (Geofenced)** → **Confirm Loading** → **Driver Arrive** → **Get Current OTP** (as CLIENT) → **Verify Arrival OTP** → **Request Delivery OTP** → **Get Current OTP** again → **Verify Delivery OTP**.\n\n## Login identifiers\n`POST /auth/login` takes **one** of two identifiers:\n\n| Role | Identifier | Variable |\n|------|-----------|----------|\n| SUPER_ADMIN, COMPANY_ADMIN | `email` | `superAdminEmail`, `companyAdminEmail` |\n| CLIENT, DRIVER | `phone` (E.164, e.g. `+9665XXXXXXX`) | `clientPhone`, `driverPhone` |\n\nA CLIENT/DRIVER phone is unique platform-wide because it *is* their credential: creating or updating a user with a non-E.164 phone returns `400`, and reusing one returns `409`. Admin phones are never resolved by **this** endpoint, so sending an admin's phone here returns `401`.\n\n### Admin phone login (spec 015)\nAdministrators (SUPER_ADMIN / FUEL_COMPANY_ADMIN / TRANSPORT_COMPANY_ADMIN) can also sign in **passwordless, by phone**, via a separate two-step flow — email+password (above) still works too, this is an alternative, not a replacement:\n1. **Auth → Login by Code – Request** (`POST /auth/login/code/request`) — always `202`, identical body whether the number resolves to an admin, a non-admin, or nobody at all (FR-015); a 6-digit code is SMS'd only when it resolves to exactly one active admin. Set `loginCodePhone` to that admin's E.164 number first (defaults to `companyAdminPhone`).\n2. Read the code — from the real SMS, or from the no-op sender's log when `SMS_PROVIDER=none` — and put it in `loginCode`.\n3. **Auth → Login by Code – Verify** (`POST /auth/login/code/verify`) — same token-pair shape as `POST /auth/login`; the test script routes the tokens into the right role-specific variables automatically.\n\nAfter repeated requests for the same number, step 1 can start returning `400 CHALLENGE_REQUIRED` with a proof-of-work `{seed, difficultyBits}` instead of the `202` — expected under `LOGIN_POW_DIFFICULTY_BITS` > 0 (the local default); not handled by this collection, since solving it needs a small script, not a request. Set `LOGIN_POW_DIFFICULTY_BITS=0` in your local `.env` to skip it entirely while testing.\n\nEach login request captures its token into a role-specific variable (`accessTokenSuperAdmin`, `accessTokenCompanyAdmin`, `accessTokenClient`, `accessTokenDriver`) plus a generic `accessToken`/`refreshToken` pair (whichever logged in most recently). Requests use the role-specific variable that actually owns that route, so folders can be run out of order as long as the relevant login already ran once.\n\nCross-tenant or wrong-role access returns `404`/`403` per `rest-api.md` — that's expected, not a bug, if you mix up which token a request uses.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -121,6 +121,21 @@
       "key": "refreshToken",
       "value": "",
       "type": "string"
+    },
+    {
+      "key": "loginCodePhone",
+      "value": "{{companyAdminPhone}}",
+      "description": "spec 015 — E.164 number of the administrator signing in via Auth → Login by Code – Request/Verify. Defaults to the Fuel Admin's phone; point it at superAdminPhone/transportAdminPhone to test another role."
+    },
+    {
+      "key": "loginCode",
+      "value": "",
+      "description": "spec 015 — the 6-digit sign-in code from Login by Code – Request, delivered by SMS. Never returned by the API — read it from the provider, or the no-op sender log when SMS_PROVIDER=none."
+    },
+    {
+      "key": "superAdminPhone",
+      "value": "+966500000000",
+      "description": "spec 015 — SUPER_ADMIN_PHONE from .env; must be a real E.164 number (seed-super-admin.ts now requires it). Used with loginCodePhone to test admin phone login as SUPER_ADMIN."
     },
     {
       "key": "accessTokenSuperAdmin",
@@ -384,7 +399,7 @@
                 "login"
               ]
             },
-            "description": "[public] 10/min. Requires the seeded platform owner (`npm run seed:super-admin`).\n\nAdmin roles sign in with **email**. Phone login is reserved for CLIENT/DRIVER, so sending this account's phone here returns 401."
+            "description": "[public] 10/min. Requires the seeded platform owner (`npm run seed:super-admin`).\n\nThis endpoint takes **email** only — sending this account's phone here returns 401, since `POST /auth/login` resolves phone for CLIENT/DRIVER alone. To sign in by phone instead, use **Login by Code – Request/Verify** (spec 015) with `loginCodePhone` set to `superAdminPhone`."
           },
           "response": [],
           "event": [
@@ -431,7 +446,7 @@
                 "login"
               ]
             },
-            "description": "[public] Run **Companies → Create Company** first so this account exists.\n\nAdmin roles sign in with **email**. Phone login is reserved for CLIENT/DRIVER, so sending this account's phone here returns 401.\n\nThis is the FUEL_COMPANY_ADMIN created alongside the Fuel Company (spec 004 — COMPANY_ADMIN's direct successor)."
+            "description": "[public] Run **Companies → Create Company** first so this account exists.\n\nThis endpoint takes **email** only — sending this account's phone here returns 401. To sign in by phone instead, use **Login by Code – Request/Verify** (spec 015); `loginCodePhone` already defaults to `companyAdminPhone`.\n\nThis is the FUEL_COMPANY_ADMIN created alongside the Fuel Company (spec 004 — COMPANY_ADMIN's direct successor)."
           },
           "response": [],
           "event": [
@@ -479,7 +494,7 @@
                 "login"
               ]
             },
-            "description": "[public] Run **Companies → Create Transporter** first so this account exists.\n\nTRANSPORT_COMPANY_ADMIN — owns a driver fleet, picks up orders routed to its company (spec 004 US2/US4)."
+            "description": "[public] Run **Companies → Create Transporter** first so this account exists.\n\nTRANSPORT_COMPANY_ADMIN — owns a driver fleet, picks up orders routed to its company (spec 004 US2/US4). This endpoint takes **email** only; to sign in by phone instead, use **Login by Code – Request/Verify** (spec 015) with `loginCodePhone` set to `transportAdminPhone`."
           },
           "response": [],
           "event": [
@@ -492,6 +507,108 @@
                   "const data = pm.response.json();",
                   "pm.collectionVariables.set('accessTokenTransportAdmin', data.accessToken);",
                   "pm.collectionVariables.set('refreshTokenTransportAdmin', data.refreshToken);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login by Code – Request",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"{{loginCodePhone}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login/code/request",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login",
+                "code",
+                "request"
+              ]
+            },
+            "description": "[public] spec 015 US2 — step 1 of passwordless administrator sign-in (SUPER_ADMIN / FUEL_COMPANY_ADMIN / TRANSPORT_COMPANY_ADMIN only; CLIENT/DRIVER never resolve here). 10/min.\n\nAlways `202` with the same body — admin, non-admin or unknown number, SMS sent or failed (FR-015) — so this response never confirms whether `loginCodePhone` belongs to anyone. A code is created and SMS'd only when it resolves to exactly one active administrator; read it from the real SMS or the no-op sender log (`SMS_PROVIDER=none`) and put it in `loginCode`, then run **Login by Code – Verify**.\n\nAfter repeated requests for the same number this can instead return `400 CHALLENGE_REQUIRED` with a proof-of-work `{seed, difficultyBits}` body — not handled by this request (solving it needs a script); set `LOGIN_POW_DIFFICULTY_BITS=0` locally to avoid it while testing."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Request accepted', () => pm.response.to.be.success);"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Login by Code – Verify",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"phone\": \"{{loginCodePhone}}\",\n  \"code\": \"{{loginCode}}\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/auth/login/code/verify",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "auth",
+                "login",
+                "code",
+                "verify"
+              ]
+            },
+            "description": "[public] spec 015 US2 — step 2. Run **Login by Code – Request** first and set `loginCode` to the 6-digit code it sent. Response is byte-identical in shape to `POST /auth/login` (FR-016); the test script below routes the returned tokens into whichever role-specific variable matches `user.role`.\n\nWrong, expired, superseded or attempt-locked-out code all return the same `400 LOGIN_CODE_INVALID` with no attempt count (FR-017)."
+          },
+          "response": [],
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Login by code succeeded', () => pm.response.to.be.success);",
+                  "const data = pm.response.json();",
+                  "pm.collectionVariables.set('accessToken', data.accessToken);",
+                  "pm.collectionVariables.set('refreshToken', data.refreshToken);",
+                  "if (data.user && data.user.id) pm.collectionVariables.set('adminUserId', data.user.id);",
+                  "if (data.user && data.user.role === 'SUPER_ADMIN') {",
+                  "  pm.collectionVariables.set('accessTokenSuperAdmin', data.accessToken);",
+                  "  pm.collectionVariables.set('refreshTokenSuperAdmin', data.refreshToken);",
+                  "} else if (data.user && data.user.role === 'FUEL_COMPANY_ADMIN') {",
+                  "  pm.collectionVariables.set('accessTokenCompanyAdmin', data.accessToken);",
+                  "  pm.collectionVariables.set('refreshTokenCompanyAdmin', data.refreshToken);",
+                  "} else if (data.user && data.user.role === 'TRANSPORT_COMPANY_ADMIN') {",
+                  "  pm.collectionVariables.set('accessTokenTransportAdmin', data.accessToken);",
+                  "  pm.collectionVariables.set('refreshTokenTransportAdmin', data.refreshToken);",
+                  "}"
                 ]
               }
             }

@@ -1,6 +1,7 @@
 import { ConflictException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { CompaniesService } from '../../companies/companies.service';
+import { TransportPricingService, DeliveryTarget } from './transport-pricing.service';
 import { FuelType } from '../../../common/enums/fuel-type.enum';
 import { ErrorCode } from '../../../common/enums/error-code.enum';
 import { DEFAULT_CURRENCY, roundCurrency } from '../../../common/constants/money.constants';
@@ -42,6 +43,7 @@ interface QuotePayload {
 export class PricingService {
   constructor(
     private readonly companiesService: CompaniesService,
+    private readonly transportPricing: TransportPricingService,
     private readonly config: ConfigService,
   ) {}
 
@@ -99,6 +101,7 @@ export class PricingService {
   private async currentRates(
     fuelCompanyId: string,
     fuelType: FuelType,
+    target: DeliveryTarget,
   ): Promise<{
     unitPrice: number;
     deliveryFee: number;
@@ -117,9 +120,17 @@ export class PricingService {
       });
     }
 
+    // The delivery leg is priced by the company that performs it. `null` means no
+    // transporter of this fuel company serves the region at all (FR-016) — the
+    // pre-existing "held at AWAITING_ROUTING and routed by hand" case, where the fuel
+    // company's own configured fee remains the only figure anyone has. Every other
+    // outcome either resolves to a transporter's own rate or refuses outright; nothing
+    // here averages, guesses, or silently prefers one transporter over another.
+    const transport = await this.transportPricing.resolve(fuelCompanyId, target, fuelType);
+
     return {
       unitPrice,
-      deliveryFee: pricingConfig.deliveryFee,
+      deliveryFee: transport ? transport.fee : pricingConfig.deliveryFee,
       serviceFeePercent: pricingConfig.serviceFeePercent,
       taxRatePercent: pricingConfig.taxRatePercent,
     };
@@ -130,8 +141,13 @@ export class PricingService {
     return this.config.get<number>('order.quoteExpiryMinutes') ?? 10;
   }
 
-  async quote(fuelCompanyId: string, fuelType: FuelType, quantityLiters: number): Promise<Quote> {
-    const rates = await this.currentRates(fuelCompanyId, fuelType);
+  async quote(
+    fuelCompanyId: string,
+    fuelType: FuelType,
+    quantityLiters: number,
+    target: DeliveryTarget,
+  ): Promise<Quote> {
+    const rates = await this.currentRates(fuelCompanyId, fuelType, target);
     const breakdown = this.derive(
       rates.unitPrice,
       quantityLiters,
@@ -172,6 +188,7 @@ export class PricingService {
     fuelCompanyId: string,
     fuelType: FuelType,
     quantityLiters: number,
+    target: DeliveryTarget,
   ): Promise<PriceBreakdown> {
     const payload = this.decode(quoteToken);
 
@@ -188,7 +205,7 @@ export class PricingService {
     ) {
       // A token quoted for different inputs is treated the same as a rate
       // change — the honest answer is "re-quote", not a silent substitution.
-      const current = await this.quote(fuelCompanyId, fuelType, quantityLiters);
+      const current = await this.quote(fuelCompanyId, fuelType, quantityLiters, target);
       throw new ConflictException({
         error: ErrorCode.QUOTE_STALE,
         message: 'Pricing has changed since this quote',
@@ -196,7 +213,7 @@ export class PricingService {
       });
     }
 
-    const rates = await this.currentRates(fuelCompanyId, fuelType);
+    const rates = await this.currentRates(fuelCompanyId, fuelType, target);
     const ratesChanged =
       rates.unitPrice !== payload.unitPrice ||
       rates.deliveryFee !== payload.deliveryFee ||

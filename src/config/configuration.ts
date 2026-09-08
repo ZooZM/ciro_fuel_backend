@@ -176,6 +176,7 @@ export interface AppConfig {
     maxRequests: number;
     windowMinutes: number;
     challengeAfter: number;
+    revealUnknownPhone: boolean;
     failThreshold: number;
     blockMinutes: number;
     pow: {
@@ -371,6 +372,13 @@ export default (): AppConfig => ({
     maxRequests: parseInt(process.env.LOGIN_OTP_MAX_REQUESTS ?? '3', 10),
     windowMinutes: parseInt(process.env.LOGIN_OTP_WINDOW_MINUTES ?? '15', 10),
     challengeAfter: parseInt(process.env.LOGIN_OTP_CHALLENGE_AFTER ?? '2', 10),
+    // Opt-in ONLY. When true, requesting a code for a number that belongs to no
+    // administrator fails with PHONE_NOT_REGISTERED instead of the neutral 202 —
+    // which trades FR-015's enumeration safety for a diagnosable failure. Useful
+    // in development, where a mistyped number is otherwise indistinguishable from
+    // a broken SMS provider; a deliberate downgrade anywhere it is reachable by
+    // the public.
+    revealUnknownPhone: process.env.LOGIN_CODE_REVEAL_UNKNOWN_PHONE === 'true',
     failThreshold: parseInt(process.env.LOGIN_OTP_FAIL_THRESHOLD ?? '10', 10),
     blockMinutes: parseInt(process.env.LOGIN_OTP_BLOCK_MINUTES ?? '60', 10),
     pow: {

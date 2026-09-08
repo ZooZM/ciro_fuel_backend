@@ -28,6 +28,15 @@ process.env.CORS_ALLOWED_ORIGINS ||= 'http://localhost:5173,https://dash.example
 process.env.STORAGE_DRIVER ||= 'local';
 process.env.SECRETS_DRIVER ||= 'env';
 
+// FR-015's enumeration safety is the DEFAULT, and it is what the login suites assert:
+// an identical 202 for a registered and an unregistered number. `LOGIN_CODE_REVEAL_UNKNOWN_PHONE`
+// turns that off deliberately, and `ConfigModule.forRoot()` reads the developer's own
+// `.env` — so a flag flipped on one machine to debug a missing SMS silently changed what
+// the platform was PROVEN to do everywhere else. Forced off here, with `=` rather than
+// `||=`: a value inherited from `.env` is exactly what must not survive. A suite that
+// wants the opt-in behaviour sets it for itself.
+process.env.LOGIN_CODE_REVEAL_UNKNOWN_PHONE = 'false';
+
 // spec 012 Story 5: pino replaces the old request-logger middleware, and its
 // non-production default is `debug` — which across 53 suites would bury the
 // jest reporter in per-request JSON. Silent by default, and overridable, so

@@ -16,6 +16,7 @@ import { TenantContextService } from './common/context/tenant-context.service';
 import { createTenantScopePlugin } from './common/plugins/tenant-scope.plugin';
 import { createMultiPartyScopePlugin } from './common/plugins/multi-party-scope.plugin';
 import { createPartySetScopePlugin } from './common/plugins/party-set-scope.plugin';
+import { createProposalScopePlugin } from './common/plugins/proposal-scope.plugin';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 import { CompaniesModule } from './modules/companies/companies.module';
@@ -117,6 +118,11 @@ import { buildPinoOptions } from './common/logging/pino.config';
           // schemas marked `partySet`; `tenant-scope.plugin.ts` and
           // `multi-party-scope.plugin.ts` above are untouched by its existence.
           connection.plugin(createPartySetScopePlugin(tenantContext));
+          // Fourth, deliberately narrow mechanism for the one collection readable by
+          // its own author OR the raiser of the offer it answers (spec 016 research
+          // R3) — only activates for schemas marked `proposal`; none of the three
+          // plugins above are touched by its existence.
+          connection.plugin(createProposalScopePlugin(tenantContext));
           return connection;
         },
       }),

@@ -239,6 +239,11 @@ export const validationSchema = Joi.object({
   // environment sets so no suite spends CPU or turns timing-flaky; `0` must
   // stay reachable in production too, as the escape hatch if the challenge
   // ever proves to be what keeps a legitimate administrator out.
+  // FR-015 is the default and stays the default: a boolean with `.default(false)`,
+  // never a `.when(NODE_ENV)` that would silently switch behaviour with the
+  // environment. Turning enumeration safety off must be an explicit, greppable act
+  // in one named variable.
+  LOGIN_CODE_REVEAL_UNKNOWN_PHONE: Joi.boolean().default(false),
   LOGIN_POW_DIFFICULTY_BITS: Joi.number().integer().min(0).max(32).default(18),
   LOGIN_POW_SEED_TTL_SECONDS: Joi.number().integer().min(30).default(300),
 });

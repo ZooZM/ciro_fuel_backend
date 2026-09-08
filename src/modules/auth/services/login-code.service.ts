@@ -1,4 +1,4 @@
-import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
 import { Connection, Model } from 'mongoose';
@@ -57,6 +57,14 @@ export class LoginCodeService {
   }
 
   /**
+   * `LOGIN_CODE_REVEAL_UNKNOWN_PHONE` — opt-in, default false. See the branch in
+   * `requestCode` for what turning it on gives up.
+   */
+  private get revealUnknownPhone(): boolean {
+    return this.config.get<boolean>('loginOtp.revealUnknownPhone') === true;
+  }
+
+  /**
    * FR-015: constant status and body for every outcome — administrator,
    * driver, client, nobody, inactive, or more than one match; SMS sent or
    * failed. Any branch on the lookup result that reaches the caller is a
@@ -111,7 +119,26 @@ export class LoginCodeService {
       this.usersService.findSingleActiveAdminByPhone(phone),
     );
     if (!holder) {
-      return response; // neutral — no code, no SMS, no audit row (FR-015)
+      // DEFAULT (FR-015): neutral — no code, no SMS, no audit row, and a body
+      // identical to the success case, so the endpoint reveals nothing about who
+      // holds an account.
+      //
+      // OPT-IN (`LOGIN_CODE_REVEAL_UNKNOWN_PHONE=true`): say so outright. This is a
+      // real trade, not a formality — it makes the endpoint answer "is this mobile
+      // number a platform administrator?" for anyone who can reach the login page.
+      // It is enabled for development, where the neutral 202 makes a mistyped digit
+      // and a broken SMS provider look identical.
+      //
+      // The abuse counters above still ran, and deliberately: they are keyed on the
+      // submitted string BEFORE the lookup (research R8), so enabling this does not
+      // hand an enumerator an unmetered oracle — they still get 3 probes per window.
+      if (this.revealUnknownPhone) {
+        throw new NotFoundException({
+          error: ErrorCode.PHONE_NOT_REGISTERED,
+          message: 'No active administrator account is registered with this mobile number',
+        });
+      }
+      return response;
     }
 
     const userId = (holder._id as { toString(): string }).toString();

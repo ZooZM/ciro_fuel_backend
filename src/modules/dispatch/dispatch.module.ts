@@ -11,6 +11,7 @@ import { OrderCoreModule } from '../orders/order-core.module';
 import { NotificationsModule } from '../notifications/notifications.module';
 import { InvoicesModule } from '../invoices/invoices.module';
 import { WarehousesModule } from '../warehouses/warehouses.module';
+import { CompaniesModule } from '../companies/companies.module';
 import { AssignmentEscalationModule } from '../assignment-escalation/assignment-escalation.module';
 
 @Module({
@@ -25,6 +26,7 @@ import { AssignmentEscalationModule } from '../assignment-escalation/assignment-
     NotificationsModule,
     InvoicesModule,
     WarehousesModule,
+    CompaniesModule,
     // spec 010: assignDriver schedules the acknowledgment-escalation window
     // once its own transaction commits (T030).
     AssignmentEscalationModule,

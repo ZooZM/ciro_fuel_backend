@@ -7,7 +7,7 @@ import { markPartySet } from '../../../common/plugins/party-set.marker';
 export type ExchangeRequestDocument = ExchangeRequest & Document;
 
 /**
- * spec 013 T218/data-model.md, Part B (built only after Part A's isolation gate passed —
+ * spec 014 T218/data-model.md, Part B (built only after Part A's isolation gate passed —
  * T217) — a fuel exchange request between exactly two fuel companies. `markPartySet`,
  * never `markTenantScoped`/`markMultiParty`: this is the one collection genuinely owned
  * by two companies, which is exactly what neither existing plugin can express (research

@@ -1,7 +1,7 @@
 import request from 'supertest';
 import { INestApplication } from '@nestjs/common';
 import { createTestApp, TestAppContext } from '../utils/test-app.factory';
-import { seedTwoCompanies, TwoCompanyFixture } from '../utils/fixtures';
+import { seedTwoCompanies, TwoCompanyFixture, uniquePhone } from '../utils/fixtures';
 
 jest.setTimeout(120_000);
 
@@ -29,10 +29,13 @@ describe('Transporter creation & region assignment (spec 004 US2)', () => {
       .send({
         name,
         contactEmail: `contact@${name.toLowerCase().replace(/\s+/g, '')}.test`,
-        contactPhone: '+966500000001',
+        contactPhone: uniquePhone(),
         adminEmail: `admin@${name.toLowerCase().replace(/\s+/g, '')}.test`,
         adminFullName: `${name} Admin`,
-        adminPhone: '+966500000002',
+        // spec 015 extended the partial unique phone index to cover admin roles, so a
+        // phone hardcoded in a helper called more than once collides on the SECOND
+        // transporter. `uniquePhone()` is what `fixtures.ts` already switched to.
+        adminPhone: uniquePhone(),
         adminPassword: 'Password123!',
       })
       .expect(201);
