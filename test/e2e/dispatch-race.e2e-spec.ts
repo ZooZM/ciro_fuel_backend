@@ -1,4 +1,5 @@
 import request from 'supertest';
+import { settleClientReview } from '../utils/fixtures';
 import { INestApplication } from '@nestjs/common';
 import { createTestApp, TestAppContext } from '../utils/test-app.factory';
 import { CompaniesService } from '../../src/modules/companies/companies.service';
@@ -59,6 +60,17 @@ describe('Smart driver dispatch (US3) — concurrency safety', () => {
       contactEmail: 'contact@racetest.test',
       contactPhone: '+966500000000',
       fuelPrices: [{ fuelType: FuelType.DIESEL, basePricePerLiter: 2.5 }],
+      // Required since order creation stopped accepting a fuel price on its
+      // own: the service fee and the tax rate live here, and without them the
+      // platform refuses PRICING_NOT_CONFIGURED rather than quietly pricing
+      // the fuel line alone.
+      pricingConfig: {
+        deliveryFee: 30,
+        serviceFeePercent: 1,
+        taxRatePercent: 15,
+        tankerCapacitiesLiters: [20000, 30000],
+        updatedAt: new Date(),
+      },
     });
     const companyId = String(company._id);
 
@@ -98,6 +110,11 @@ describe('Smart driver dispatch (US3) — concurrency safety', () => {
     });
     await companiesService.assignRegions(companyId, String(transportCompany._id), [
       RegionCode.RIYADH,
+    ]);
+    // A transporter must price the areas it serves before it can be routed
+    // work — the delivery leg is priced by the company that performs it.
+    await companiesService.setDeliveryRates(String(transportCompany._id), [
+      { regionCode: RegionCode.RIYADH, pricePerKm: 0, minPrice: 30 },
     ]);
     const transportAdmin = await usersService.create({
       companyId: transportCompany._id as never,
@@ -176,8 +193,15 @@ describe('Smart driver dispatch (US3) — concurrency safety', () => {
         .send({})
         .expect(200),
     ]);
-    expect(approve1.body.status).toBe(OrderStatus.ROUTED_TO_TRANSPORT);
-    expect(approve2.body.status).toBe(OrderStatus.ROUTED_TO_TRANSPORT);
+    expect(approve1.body.status).toBe(OrderStatus.PENDING_PAYMENT);
+    expect(approve2.body.status).toBe(OrderStatus.PENDING_PAYMENT);
+
+    // Both orders are waiting on their station owner's review of the real
+    // total; a driver cannot be assigned until that is settled. Settled
+    // sequentially, BEFORE the race — the race under test is the two
+    // assignments, not the two settlements.
+    await settleClientReview(app, order1.body._id);
+    await settleClientReview(app, order2.body._id);
 
     // The actual race (spec 004 FR-018/SC-003): the transporter assigns the
     // SAME single driver to BOTH orders concurrently. Exactly one must win.
@@ -213,6 +237,8 @@ describe('Smart driver dispatch (US3) — concurrency safety', () => {
       .get(`/api/v1/orders/${losingOrderId}`)
       .set('Authorization', `Bearer ${adminAuth.accessToken}`)
       .expect(200);
+    // The loser was settled along with the winner, so it is back with its
+    // transporter awaiting a driver — it simply did not get this one.
     expect(losingOrder.body.status).toBe(OrderStatus.ROUTED_TO_TRANSPORT);
     expect(losingOrder.body.driverId).toBeFalsy();
 
@@ -255,6 +281,17 @@ describe('Smart driver dispatch (US3) — concurrency safety', () => {
       contactEmail: 'contact@sameorderrace.test',
       contactPhone: '+966500000010',
       fuelPrices: [{ fuelType: FuelType.DIESEL, basePricePerLiter: 2.5 }],
+      // Required since order creation stopped accepting a fuel price on its
+      // own: the service fee and the tax rate live here, and without them the
+      // platform refuses PRICING_NOT_CONFIGURED rather than quietly pricing
+      // the fuel line alone.
+      pricingConfig: {
+        deliveryFee: 30,
+        serviceFeePercent: 1,
+        taxRatePercent: 15,
+        tankerCapacitiesLiters: [20000, 30000],
+        updatedAt: new Date(),
+      },
     });
     const companyId = String(company._id);
 
@@ -292,6 +329,11 @@ describe('Smart driver dispatch (US3) — concurrency safety', () => {
     });
     await companiesService.assignRegions(companyId, String(transportCompany._id), [
       RegionCode.RIYADH,
+    ]);
+    // A transporter must price the areas it serves before it can be routed
+    // work — the delivery leg is priced by the company that performs it.
+    await companiesService.setDeliveryRates(String(transportCompany._id), [
+      { regionCode: RegionCode.RIYADH, pricePerKm: 0, minPrice: 30 },
     ]);
     const transportAdmin = await usersService.create({
       companyId: transportCompany._id as never,
@@ -371,7 +413,11 @@ describe('Smart driver dispatch (US3) — concurrency safety', () => {
       .set('Authorization', `Bearer ${adminAuth.accessToken}`)
       .send({})
       .expect(200);
-    expect(approved.body.status).toBe(OrderStatus.ROUTED_TO_TRANSPORT);
+    expect(approved.body.status).toBe(OrderStatus.PENDING_PAYMENT);
+
+    // Settled BEFORE the race, so the only thing the two assignments contend
+    // for is the order's own ROUTED_TO_TRANSPORT -> ASSIGNED_TO_DRIVER edge.
+    await settleClientReview(app, order.body._id);
 
     // The race: the SAME order, two concurrent assign calls, each naming a different
     // driver/truck/tank. Exactly one must win — the order's own ROUTED_TO_TRANSPORT →

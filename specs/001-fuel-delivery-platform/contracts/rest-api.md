@@ -109,7 +109,7 @@ app, which calls this same endpoint.
 | Method | Path | Roles | Notes |
 |--------|------|-------|-------|
 | POST | `/companies` | SUPER_ADMIN | multipart: company fields + `commercialRegister` file + initial admin `{email, fullName, phone, password}` (FR-018). Always creates `type: FUEL`, with a `FUEL_COMPANY_ADMIN` admin |
-| GET | `/companies` | SUPER_ADMIN, FUEL_COMPANY_ADMIN | CIRO sees every company; a `FUEL_COMPANY_ADMIN` sees only their own (spec 004 US1) — not paginated |
+| GET | `/companies?type=&status=` | SUPER_ADMIN, FUEL_COMPANY_ADMIN | CIRO sees every company; a `FUEL_COMPANY_ADMIN` sees only their own (spec 004 US1) — not paginated. **spec 017 FR-010/FR-013**: `type` (`FUEL\|TRANSPORT`) and `status` (`ACTIVE\|SUSPENDED`) are now READ — before spec 017 the handler bound no query parameters at all and the dashboard had been sending `?type=FUEL` since spec 013 with no effect (research R2). Absent or empty means every value; an unrecognised value is `400`. Both **intersect** a `FUEL_COMPANY_ADMIN`'s own-tenant narrowing, never widen it (FR-012) |
 | GET | `/companies/:id` | SUPER_ADMIN, own FUEL_COMPANY_ADMIN (also its own transporters) | |
 | PATCH | `/companies/:id/status` | SUPER_ADMIN | `{ status: ACTIVE\|SUSPENDED }` |
 | GET | `/companies/:id/fuel-prices` | own FUEL_COMPANY_ADMIN, own CLIENT | price list for estimates |
@@ -117,6 +117,7 @@ app, which calls this same endpoint.
 | GET | `/companies/:id/pricing-config` | own FUEL_COMPANY_ADMIN, own CLIENT | `PricingConfig` — spec 005, see below |
 | PUT | `/companies/:id/pricing-config` | own FUEL_COMPANY_ADMIN | `SetPricingConfigDto` → updated `PricingConfig` — spec 005 |
 | POST | `/companies/:id/transporters` | own FUEL_COMPANY_ADMIN | `{ name, contactEmail, contactPhone, adminEmail, adminFullName, adminPhone, adminPassword }` → creates a `type: TRANSPORT` company under `:id` plus its `TRANSPORT_COMPANY_ADMIN`, `201 { company, admin }` (spec 004 US2) |
+| POST | `/companies/transporters` | SUPER_ADMIN | **spec 017 FR-027/FR-029/FR-030** — the OPERATOR onboarding a transporter. Same body as `/companies/:id/transporters` plus a **required** `parentFuelCompanyId`, which must exist and be of type `FUEL` (`400 INVALID_PARENT_FUEL_COMPANY` otherwise, nothing created). Company + admin are one transaction (FR-028). Declared BEFORE `:id/transporters` so Nest does not capture `transporters` as an `:id`. Deliberately omits that route's post-insert `companyId` correction: a `SUPER_ADMIN` actor takes the tenant plugin's role bypass, so `pre('save')` writes nothing to correct (research R12) |
 | PUT | `/companies/:id/regions` | owning FUEL_COMPANY_ADMIN (of the transporter at `:id`) | `{ regionCodes: RegionCode[] }` — replaces `servedRegions` wholesale on a Transportation Company; drives routing (FR-014/FR-015/FR-016) |
 
 ### Pricing config (spec 005 D1/FR-011)
@@ -251,13 +252,14 @@ by their fuel company.
 |--------|------|-------|--------------|
 | POST | `/orders/quote` | CLIENT | `{ fuelType, quantityLiters, stationId }` → `Quote` — spec 005, see below |
 | POST | `/orders` | CLIENT | `{ fuelType, quantityLiters, stationId, quoteToken, paymentMethod? }` → 201 with `status: PENDING_APPROVAL`, `estimatedPrice`, `priceBreakdown` (FR-007/008a/011e). `paymentMethod` defaults to `DIRECT` (FR-021). `stationId` and `quoteToken` are both required (spec 005) |
-| GET | `/orders?status=&cursor=` | any (scoped by the multi-party plugin: CLIENT→own, DRIVER→assigned, FUEL_COMPANY_ADMIN→own fuel company, TRANSPORT_COMPANY_ADMIN→own routed orders, SUPER_ADMIN→all) | Paginated (see Cursor pagination above), ordered `statusChangedAt` desc. Each item includes `etaMinutes` (FR-029, `null` until a driver is assigned and has a position on file) |
+| GET | `/orders?status=&bucket=&orderId=&cursor=` | any (scoped by the multi-party plugin: CLIENT→own, DRIVER→assigned, FUEL_COMPANY_ADMIN→own fuel company, TRANSPORT_COMPANY_ADMIN→own routed orders, SUPER_ADMIN→all) | Paginated (see Cursor pagination above), ordered `statusChangedAt` desc. Each item includes `etaMinutes` (FR-029, `null` until a driver is assigned and has a position on file). **spec 017 FR-016/FR-016a**: `bucket` is one of the six `OrderStatusBucket` values and expands to `status: { $in: [...] }` — **never a `$or`**, which both scoping plugins would silently discard via `Query.where()` (research R4). A `status` outside a supplied `bucket` is `400 ORDER_BUCKET_STATUS_CONFLICT`, never a silently empty page. `orderId` is an exact identifier that overrides both; **search is identifier-only** — `Order` has no human reference field and the platform carries no text index, so free-text search is explicitly out of scope (research R13) |
 | GET | `/orders/:id` | as above | includes `statusHistory`, `driverSummary` (FR-028, absent pre-assignment), `etaMinutes`, `deliveryAddressText`, `priceBreakdown` and `station` (spec 005); driver DTO **never** includes `otps` |
-| PATCH | `/orders/:id/approve` | FUEL_COMPANY_ADMIN | `{ finalPrice?, transportCompanyId? }` — omitted `finalPrice` ⇒ `finalPrice = estimatedPrice`. Issues the order's invoice using `finalPrice` (FR-020) — a CREDIT order over the client's available credit is refused (400, no invoice issued, FR-025). Then: a **DIRECT** order → `PENDING_PAYMENT` (routing deferred until settlement, FR-020a); **DEFERRED/CREDIT** route immediately — exactly one serving Transportation Company → `ROUTED_TO_TRANSPORT`; none → `AWAITING_ROUTING` + Fuel Company notified (FR-016); several → `AWAITING_ROUTING` with `routingCandidates` in the response unless `transportCompanyId` was supplied, which routes immediately to that choice (FR-014) |
+| PATCH | `/orders/:id/approve` | FUEL_COMPANY_ADMIN | `{ finalPrice?, transportCompanyId? }` — omitted `finalPrice` ⇒ `finalPrice = estimatedPrice` (the FUEL line; the haul is not priced yet). Approves, then ROUTES, for **every** payment method: exactly one serving Transportation Company → routed automatically; none → `AWAITING_ROUTING` + Fuel Company notified (FR-016); several → `AWAITING_ROUTING` with `routingCandidates` in the response unless `transportCompanyId` was supplied, which routes to that choice (FR-014). Routing prices the delivery leg from the chosen transporter's own `deliveryRates`, re-derives the total, issues the invoice (FR-020) and returns the order to the station owner → `PENDING_PAYMENT` (FR-020a). A transporter that has priced no covering area cannot be routed to (409 `TRANSPORT_PRICE_NOT_SET`). A CREDIT order over the client's available credit, or a company over its commission ceiling, is refused (400/409) and the refusal **undoes the routing**, leaving the order `APPROVED`, un-routed and uninvoiced (FR-020a-i, FR-025) — recoverable via `PATCH /orders/:id/route` once the cause is cleared |
 | PATCH | `/orders/:id/route` | FUEL_COMPANY_ADMIN | `{ transportCompanyId }` — resolves an `AWAITING_ROUTING` order manually (FR-014's Fuel-Company choice, or FR-016's later resolution once a transporter gains region coverage); 409 if the order isn't `AWAITING_ROUTING`; 400 if the choice doesn't actually serve the region |
 | PATCH | `/orders/:id/reject` | FUEL_COMPANY_ADMIN | `{ reason }` → `REJECTED` |
 | PATCH | `/orders/:id/cancel` | CLIENT (pre-assignment, or declining the Final Price while `PENDING_PAYMENT`), FUEL_COMPANY_ADMIN (until `IN_TRANSIT`) | → `CANCELLED`; transactionally releases the driver (if assigned) and voids the order's invoice if one was issued (a voided CREDIT invoice implicitly restores the client's available credit, FR-024/FR-027) |
-| POST | `/orders/:id/redispatch` | FUEL_COMPANY_ADMIN, CLIENT (CLIENT blocked once `paymentTimeoutCount ≥ 2` — admin-only thereafter, FR-015a) | only from `APPROVED` (reached only via a DIRECT payment timeout — DEFERRED/CREDIT never expire, FR-020b) — re-opens a fresh payment window; routing itself resumes once that window is paid, exactly like the original approval |
+| POST | `/orders/:id/accept` | CLIENT (the order's own) | The station owner confirms the final total once routing has priced the haul → `PENDING_PAYMENT` → `ROUTED_TO_TRANSPORT`, releasing the order for driver assignment. **DEFERRED and CREDIT only** — they are settled against an invoice and have no gateway payment to make; a DIRECT order is confirmed by PAYING it, and this refuses one with 409 `ORDER_NOT_AWAITING_CONFIRMATION` rather than offering a second way past the same gate. No deadline applies (FR-020b): the order waits indefinitely. Refusing the total is `PATCH /orders/:id/cancel` above |
+| POST | `/orders/:id/redispatch` | FUEL_COMPANY_ADMIN, CLIENT (CLIENT blocked once `paymentTimeoutCount ≥ 2` — admin-only thereafter, FR-015a) | only from `APPROVED` (reached only via a DIRECT payment timeout — DEFERRED/CREDIT never expire, FR-020b) — re-opens a fresh payment window; settlement then returns the order to the transporter it is already routed to |
 | GET | `/orders/:id/otp/current` | CLIENT (order owner) | `{ purpose, otp, expiresAt }` — the ONLY place plaintext OTP appears (FR-021/022) |
 | POST | `/orders/:id/arrive` | DRIVER (assigned) | order must be `IN_TRANSIT`; generates ARRIVAL OTP — idempotent while an unused, unexpired OTP exists; if the active OTP has EXPIRED, issues a fresh record with attempts reset (same rule for `request-delivery-otp`); response contains NO otp |
 | POST | `/orders/:id/verify-arrival` (5/15min) | DRIVER (assigned) | `{ otp }` → on match: `UNLOADING`; 422 wrong otp; 429 throttled (FR-021/023) |
@@ -394,9 +396,12 @@ route — they receive the conclusion (`vehicleVerified`) and never the evidence
 | GET | `/invoices/:id` | as above | one invoice: `{orderId, fuelCompanyId, clientId, transportCompanyId?, amount, method, state, payerRole, settledAt?, paymentReference?, priceBreakdown?}` |
 | POST | `/invoices/:id/settle` | TRANSPORT_COMPANY_ADMIN (DEFERRED only), FUEL_COMPANY_ADMIN (CREDIT only) | `{ paymentReference? }` — manual settlement for the two methods the platform never confirms via a payment gateway webhook. 403 for a DIRECT invoice (settled only by the signed Sadad/Mada webhook) or the wrong role for the invoice's method. Idempotent: settling an already-SETTLED or VOIDed invoice is a no-op, never resurrected |
 
-Every order gets exactly one invoice, issued at approval with the final price (FR-020). DIRECT
-is settled by `POST /payments/webhook/:gateway` (unchanged contract, now also resuming routing
-on success — FR-020a). Available credit is always derived as `creditLimit − Σ(outstanding ISSUED
+Every order gets exactly one invoice, issued **at routing** with the complete final price
+including the delivery leg (FR-020) — the transport company that performs the haul is the one
+that prices it, so no total exists before routing resolves one. DIRECT is settled by
+`POST /payments/webhook/:gateway` (unchanged contract), which releases the order back to the
+transporter it was already routed to; DEFERRED/CREDIT are confirmed by
+`POST /orders/:id/accept` instead, with no deadline (FR-020a, FR-020b). Available credit is always derived as `creditLimit − Σ(outstanding ISSUED
 credit invoices)` — never an independently mutated counter (FR-024a) — so settling or voiding a
 credit invoice restores it implicitly.
 
@@ -601,6 +606,49 @@ Accepting creates no order, delivery or invoice — a fuel exchange settles outs
 `POST /companies`, `PATCH /companies/:id/status` were all pre-existing. Controls reserved to the
 operator (commission/cashback writes, ceiling, payment confirmation, company status) are **absent**,
 not merely disabled, from a `FUEL_COMPANY_ADMIN`'s render of any screen shared with the operator.
+
+## Platform operator dashboard (spec 017)
+
+Five new routes and four changed ones. **No migration**: this feature rewrites nothing and adds no
+field to any existing document.
+
+The operator's platform-wide reach on every route below is the **existing** `SUPER_ADMIN` bypass in
+both scoping plugins — verified to cover queries, `save`, `insertMany` **and** `aggregate`. No
+`runUnscoped`, no second connection, and neither plugin was modified (research R1).
+
+### New
+
+| Method | Path | Roles | Notes |
+|--------|------|-------|-------|
+| GET | `/platform/overview?from=&to=` | SUPER_ADMIN | The operator's home screen in one response: `period`, `pointInTime` and `breakdown`. **The three period figures do NOT share one basis** (FR-001a): `orderCount` counts orders RAISED in the period (`createdAt`, every state) while `orderValue`/`litresMoved` count DELIVERED orders only (`deliveredAt`) — a delivered-only count would BE the `COMPLETED` bucket and force the other five to zero. `period.basis` states which is which. `pointInTime` is NOT period-bounded. Every numeric field is present and `0` on an empty period, never null. **No trend field at any nesting level** (FR-009) |
+| GET | `/platform/transport-company-volumes?companyIds=&from=&to=` | SUPER_ADMIN | Order volume for a whole PAGE of transporters in **one** aggregate (FR-026a/FR-026b), never one query per row. A transporter never routed to reports `orderCount: 0`, not omitted. Period resolves identically to `/platform/overview` |
+| GET | `/drivers/roster?isActive=&dutyState=&cursor=` | SUPER_ADMIN | Every driver, their employer, their last operated truck and a three-valued `dutyState`. Sorted `createdAt`/`_id` — fields every driver has — so a never-connected driver cannot be silently dropped (FR-040). `lastOperatedTruck: null` means **never driven** (FR-039b) and is derived from order history in one aggregate projecting `truckId` alone. **Carries no location, trip count, delivery date or order reference of any kind** (FR-043/FR-044, asserted against the serialized body) |
+| GET | `/auth/me/account` | SUPER_ADMIN | The operator's own name, email, real sign-in number, `activeSessionCount` and `lastSignInAt`. The last is read from the append-only `SessionEvent` log, not `User.activeSessions`, which empties on sign-out. **No permission list and no account statistic** — the platform records neither (FR-063) |
+| POST | `/announcements` | SUPER_ADMIN | **202**, not 201 — the fan-out is enqueued, not performed (FR-055). `{ title, body, targetCompanyIds }`; an **empty** `targetCompanyIds` means every active company (FR-049). Returns `{ announcementId, intendedRecipientCount, state: QUEUED }` |
+| GET | `/announcements?cursor=` | SUPER_ADMIN | What was sent, newest first (FR-052) |
+| GET | `/announcements/:id` | SUPER_ADMIN | The announcement, its tallies, and the failed deliveries with a **named** `failureReason` each (FR-054) |
+| GET | `/platform-account/cashback/:companyId/owed` | SUPER_ADMIN | `{ companyId, owed, currency }` — computed live as confirmed `CASHBACK_CREDITED` minus confirmed `CASHBACK_PAID_OUT`. A **two-kind** derivation: the existing per-kind balance cannot answer this, and reusing it would leave the figure unchanged after every payout (research R11) |
+| POST | `/platform-account/cashback/:companyId/payouts` | SUPER_ADMIN | multipart: `amount`, `method`, a **required** `reference`, optional `evidence` file. **One transaction that re-reads the owed balance inside the session** (FR-069). Created already `CONFIRMED` — there is no second party to confirm the operator's own assertion. `409` over balance (nothing recorded) and `409` on a duplicate reference, the latter from a partial unique index, never a prior read (FR-070). **No payment provider is integrated** (FR-073) |
+
+### Changed
+
+| Route | Change |
+|-------|--------|
+| `GET /companies` | now binds `type` and `status` — see the Companies section |
+| `GET /orders` | now binds `bucket` and `orderId` — see the Orders section |
+| `GET /orders/summary` | `SUPER_ADMIN` receives a **third shape**, `PlatformSummaryDto` (`{ from, to, buckets, total }`, six buckets, `total` equal to their sum). It previously fell through to the TRANSPORT company's shape — `awaitingAssignment`/`driversOnDuty` computed platform-wide, answering a transporter's questions (research R5). The `FUEL_COMPANY_ADMIN` and `TRANSPORT_COMPANY_ADMIN` responses are byte-for-byte unchanged |
+| `PATCH /orders/:id/force-complete` | roles `FUEL_COMPANY_ADMIN` → `FUEL_COMPANY_ADMIN, SUPER_ADMIN` (FR-020). Permitted stages unchanged (`LOADING`, `IN_TRANSIT`, `UNLOADING`) but now read from `FORCE_COMPLETABLE_STATUSES` by both the check and the refusal message, which were previously two independent statements of the same list |
+| `GET /platform-account/movements` | every movement gains a derived `direction` (`INBOUND`/`OUTBOUND`). **Response-only, computed from `kind` at serialisation** — no schema field, no migration, no existing field changed (FR-064) |
+| `POST /users/me/phone/verification` | the duplicate-holder pre-check now uses a role- and active-agnostic lookup. It previously called a `CLIENT`/`DRIVER`-scoped one, so changing onto another ADMINISTRATOR's number passed the check, **spent an SMS**, and was refused only at confirm by the unique index spec 015 extended to all five roles (FR-061, research R10). Route, throttle, `202` shape and confirm step are unchanged |
+
+### Error codes introduced (spec 017)
+
+| Code | Status | Meaning |
+|------|--------|---------|
+| `ORDER_BUCKET_STATUS_CONFLICT` | 400 | `status` and `bucket` were both supplied and the status is not a member of that bucket |
+| `INVALID_PARENT_FUEL_COMPANY` | 400 | `parentFuelCompanyId` is absent, malformed, names no company, or names one that is not of type `FUEL` |
+| `CASHBACK_PAYOUT_EXCEEDS_BALANCE` | 409 | The payout exceeds the owed balance **re-read inside the recording transaction** — not the figure the operator's screen was showing |
+| `CASHBACK_PAYOUT_DUPLICATE_REFERENCE` | 409 | A payout with this reference is already recorded for this company; translated from the partial unique index |
 
 ## Status codes summary
 

@@ -65,14 +65,22 @@ describe('Commission accrual matches the rate in force, including across a rate 
       .set('Authorization', `Bearer ${admin.token}`)
       .expect(200);
 
-    // DIESEL @ 2.5/L (fixture) * 200L = 500.00 -> 10% = 50.00
-    await createAndApproveOrder(client.token, admin.token, 'CREDIT', 200);
+    // The platform's cut is a percentage of the INVOICE, so the expectation is
+    // derived from the order's own `finalPrice` rather than restating the
+    // arithmetic here. That total is fuel + service fee + haul + VAT; a literal
+    // would have to be rewritten every time any one of those moves, and a
+    // literal that drifts silently tests nothing.
+    const firstOrder = await createAndApproveOrder(client.token, admin.token, 'CREDIT', 200);
+    const firstCommission = Math.round(firstOrder.finalPrice * 10) / 100;
 
     const afterFirst = await request(server)
       .get('/api/v1/billing/balances/me')
       .set('Authorization', `Bearer ${admin.token}`)
       .expect(200);
-    expect(afterFirst.body.commissionAccrued).toBeCloseTo(before.body.commissionAccrued + 50, 2);
+    expect(afterFirst.body.commissionAccrued).toBeCloseTo(
+      before.body.commissionAccrued + firstCommission,
+      2,
+    );
 
     // Rate changes to 20% — must not touch what already accrued.
     await request(server)
@@ -87,14 +95,18 @@ describe('Commission accrual matches the rate in force, including across a rate 
       .expect(200);
     expect(afterRateChangeAlone.body.commissionAccrued).toBeCloseTo(afterFirst.body.commissionAccrued, 2);
 
-    // A NEW invoice at the new 20% rate: 2.5 * 200 = 500 -> 20% = 100.00
-    await createAndApproveOrder(client.token, admin.token, 'CREDIT', 200);
+    // A NEW invoice at the new 20% rate, again derived from its own total.
+    const secondOrder = await createAndApproveOrder(client.token, admin.token, 'CREDIT', 200);
+    const secondCommission = Math.round(secondOrder.finalPrice * 20) / 100;
 
     const afterSecond = await request(server)
       .get('/api/v1/billing/balances/me')
       .set('Authorization', `Bearer ${admin.token}`)
       .expect(200);
-    expect(afterSecond.body.commissionAccrued).toBeCloseTo(afterFirst.body.commissionAccrued + 100, 2);
+    expect(afterSecond.body.commissionAccrued).toBeCloseTo(
+      afterFirst.body.commissionAccrued + secondCommission,
+      2,
+    );
   });
 
   it('accrues at the PER_UNIT rate, and states which basis is in force (FR-055)', async () => {
@@ -119,15 +131,16 @@ describe('Commission accrual matches the rate in force, including across a rate 
       .set('Authorization', `Bearer ${admin.token}`)
       .expect(200);
 
-    // DEFERRED — no credit-limit setup needed. DIESEL @ 2.5/L (fixture) * 100L = 250.00
-    // -> 0.05 per unit of invoice value = 12.50
+    // DEFERRED — no credit-limit setup needed. DIESEL @ 2.5/L (fixture) * 100L
+    // = 250.00 of fuel + 30.00 haul = 280.00 -> 0.05 per unit of invoice value
+    // = 14.00. The order amount now includes the transporter's 30 SAR haul, so the platform's cut is taken on fuel + delivery.
     await createAndApproveOrder(client.token, admin.token, 'DEFERRED', 100);
 
     const after = await request(server)
       .get('/api/v1/billing/balances/me')
       .set('Authorization', `Bearer ${admin.token}`)
       .expect(200);
-    expect(after.body.commissionAccrued).toBeCloseTo(before.body.commissionAccrued + 12.5, 2);
+    expect(after.body.commissionAccrued).toBeCloseTo(before.body.commissionAccrued + 14, 2);
 
     // A FUEL_COMPANY_ADMIN sees the terms read-only — no PUT access at all (FR-056).
     await request(server)

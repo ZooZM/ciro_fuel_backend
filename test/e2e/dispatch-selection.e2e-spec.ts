@@ -2,7 +2,7 @@ import request from 'supertest';
 import { randomUUID } from 'node:crypto';
 import { INestApplication } from '@nestjs/common';
 import { createTestApp, TestAppContext } from '../utils/test-app.factory';
-import { uniquePhone } from '../utils/fixtures';
+import { uniquePhone, settleClientReview } from '../utils/fixtures';
 import { CompaniesService } from '../../src/modules/companies/companies.service';
 import { UsersService } from '../../src/modules/users/users.service';
 import { AuthService } from '../../src/modules/auth/auth.service';
@@ -58,6 +58,17 @@ async function seedCompanyWithDrivers(app: INestApplication) {
     contactEmail: 'contact@dispatchtest.test',
     contactPhone: '+966500000000',
     fuelPrices: [{ fuelType: FuelType.DIESEL, basePricePerLiter: 2.5 }],
+    // A fuel price alone no longer makes a company tradeable: the service fee
+    // and tax rate live here, and order creation refuses PRICING_NOT_CONFIGURED
+    // without them — the same refusal `POST /orders/quote` has always given.
+    // Matches `seedTwoCompanies` so totals across suites stay comparable.
+    pricingConfig: {
+      deliveryFee: 30,
+      serviceFeePercent: 1,
+      taxRatePercent: 15,
+      tankerCapacitiesLiters: [20000, 22000, 32000, 33000, 36000, 42000, 46000],
+      updatedAt: new Date(),
+    },
   });
   const companyId = String(company._id);
 
@@ -98,6 +109,11 @@ async function seedCompanyWithDrivers(app: INestApplication) {
   });
   await companiesService.assignRegions(companyId, String(transportCompany._id), [
     RegionCode.RIYADH,
+  ]);
+  // A transporter must price the areas it serves before it can be routed
+  // work — the delivery leg is priced by the company that performs it.
+  await companiesService.setDeliveryRates(String(transportCompany._id), [
+    { regionCode: RegionCode.RIYADH, pricePerKm: 0, minPrice: 30 },
   ]);
   const transportAdmin = await usersService.create({
     companyId: transportCompany._id as never,
@@ -218,8 +234,12 @@ describe('Smart driver dispatch (US3) — selection rules', () => {
       .set('Authorization', `Bearer ${fixture.admin.token}`)
       .send({})
       .expect(200);
-    expect(approveRes.body.status).toBe(OrderStatus.ROUTED_TO_TRANSPORT);
+    // Routing now prices the haul and hands the order back to the station
+    // owner, so approval lands on PENDING_PAYMENT rather than going straight
+    // to the transporter; the settlement step below is what releases it.
+    expect(approveRes.body.status).toBe(OrderStatus.PENDING_PAYMENT);
 
+    await settleClientReview(app, orderId);
     const candidatesRes = await request(server)
       .get(`/api/v1/dispatch/orders/${orderId}/candidates`)
       .set('Authorization', `Bearer ${fixture.transportAdmin.token}`)
@@ -235,6 +255,7 @@ describe('Smart driver dispatch (US3) — selection rules', () => {
     truckId: string,
     tankId: string,
   ) {
+    await settleClientReview(app, orderId);
     const res = await request(app.getHttpServer())
       .post(`/api/v1/dispatch/orders/${orderId}/assign`)
       .set('Authorization', `Bearer ${fixture.transportAdmin.token}`)
@@ -290,6 +311,7 @@ describe('Smart driver dispatch (US3) — selection rules', () => {
     expect(ids).toContain(fartherButBig.id);
     expect(ids).toContain(nearButSmall.id);
 
+    await settleClientReview(app, orderId);
     const rejected = await request(app.getHttpServer())
       .post(`/api/v1/dispatch/orders/${orderId}/assign`)
       .set('Authorization', `Bearer ${fixture.transportAdmin.token}`)
@@ -332,6 +354,7 @@ describe('Smart driver dispatch (US3) — selection rules', () => {
     expect(ids).toContain(rightFuel.id);
     expect(ids).toContain(wrongFuel.id);
 
+    await settleClientReview(app, orderId);
     const rejected = await request(app.getHttpServer())
       .post(`/api/v1/dispatch/orders/${orderId}/assign`)
       .set('Authorization', `Bearer ${fixture.transportAdmin.token}`)
@@ -425,6 +448,7 @@ describe('Smart driver dispatch (US3) — selection rules', () => {
       .expect(200);
     await assign(fixture, secondOrder.body._id, driver.id, driver.truckId, driver.tankId);
 
+    await settleClientReview(app, orderId);
     await request(app.getHttpServer())
       .post(`/api/v1/dispatch/orders/${orderId}/assign`)
       .set('Authorization', `Bearer ${fixture.transportAdmin.token}`)

@@ -83,3 +83,35 @@ markTenantScoped(AccountMovementSchema);
 
 AccountMovementSchema.index({ companyId: 1, createdAt: -1, _id: -1 });
 AccountMovementSchema.index({ companyId: 1, state: 1 });
+
+/**
+ * spec 017 (operator dashboard) T138/FR-070 — a cashback payout reference is
+ * unique per company.
+ *
+ * **This index, not an application pre-read, IS the guarantee.** A
+ * read-then-write duplicate check is a race: two submissions of the same
+ * reference can both find nothing and both write. The refusal the operator sees
+ * is translated from this index's violation
+ * (`CASHBACK_PAYOUT_DUPLICATE_REFERENCE`), the same idiom `ratings.service.ts`
+ * and `dispatch.service.ts` already use.
+ *
+ * Partial on **BOTH** `kind` and `reference` existing, and both clauses matter:
+ *
+ *  - without the `kind` clause it would constrain existing `PAYMENT_RECORDED`
+ *    rows, which have never been unique on reference and for which no such rule
+ *    was ever stated — a company recording two payments under one bank
+ *    reference would start being refused, silently, by an index added for an
+ *    unrelated feature;
+ *  - without the `reference` clause every row lacking one would collide on
+ *    `null`.
+ */
+AccountMovementSchema.index(
+  { companyId: 1, kind: 1, reference: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      kind: AccountMovementKind.CASHBACK_PAID_OUT,
+      reference: { $exists: true },
+    },
+  },
+);

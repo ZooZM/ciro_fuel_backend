@@ -1,7 +1,7 @@
 import request from 'supertest';
 import { INestApplication } from '@nestjs/common';
 import { createTestApp, TestAppContext } from '../utils/test-app.factory';
-import { seedTwoCompanies, TwoCompanyFixture } from '../utils/fixtures';
+import { seedTwoCompanies, TwoCompanyFixture, settleClientReview } from '../utils/fixtures';
 
 jest.setTimeout(120_000);
 
@@ -255,6 +255,7 @@ describe('Tenant data isolation (US2) — company A vs company B', () => {
     );
 
     // ...nor can the sibling see it among dispatch candidates or assign a driver to it.
+    await settleClientReview(app, createRes.body._id);
     await request(server)
       .get(`/api/v1/dispatch/orders/${createRes.body._id}/candidates`)
       .set('Authorization', `Bearer ${siblingLogin.body.accessToken}`)
@@ -303,6 +304,7 @@ describe('Tenant data isolation (US2) — company A vs company B', () => {
       .set('Authorization', `Bearer ${admin.token}`)
       .send({})
       .expect(200);
+    await settleClientReview(app, createRes.body._id);
     await request(server)
       .post(`/api/v1/dispatch/orders/${createRes.body._id}/assign`)
       .set('Authorization', `Bearer ${transportAdmin.token}`)

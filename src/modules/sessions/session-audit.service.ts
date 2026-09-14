@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { ClientSession, Model } from 'mongoose';
+import { ClientSession, Model, Types } from 'mongoose';
 import { SessionEvent, SessionEventDocument } from './schemas/session-event.schema';
 import { SessionEventType } from '../../common/enums/session-event-type.enum';
 import { SessionRevocationCause } from '../../common/enums/session-revocation-cause.enum';
@@ -46,6 +46,26 @@ export class SessionAuditService {
     private readonly sessionEventModel: Model<SessionEventDocument>,
   ) {}
 
+  /**
+   * spec 017 (operator dashboard) T123/FR-058 — when this account last signed
+   * in.
+   *
+   * Read from the append-only audit log rather than from
+   * `User.activeSessions`, and that is the point: the array holds only
+   * CURRENT sessions, so it empties on sign-out and would report "never signed
+   * in" for an administrator who signs in and out daily. The log has no TTL
+   * (spec 006) and is never pruned, so this answer stays correct (research R10).
+   *
+   * `null` means genuinely never — an account created but not yet used.
+   */
+  async lastSignInAt(userId: string | Types.ObjectId): Promise<Date | null> {
+    const latest = await this.sessionEventModel
+      .findOne({ userId: new Types.ObjectId(userId), type: SessionEventType.SIGNED_IN })
+      .sort({ createdAt: -1 })
+      .select({ createdAt: 1 })
+      .exec();
+    return (latest as { createdAt?: Date } | null)?.createdAt ?? null;
+  }
   async signedIn(subject: SessionSubject, session?: ClientSession): Promise<void> {
     await this._write(subject, SessionEventType.SIGNED_IN, undefined, session);
   }

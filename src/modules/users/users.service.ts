@@ -68,6 +68,37 @@ export class UsersService {
     return matches.length === 1 ? matches[0] : null;
   }
 
+  /**
+   * spec 017 (operator dashboard) T120/FR-061 — does ANY account hold this
+   * number.
+   *
+   * Role-agnostic and active-agnostic, and both halves are deliberate:
+   *
+   *  - **Role-agnostic**, because feature 015 extended the partial unique phone
+   *    index to all five roles. The existing pre-check calls
+   *    `findByPhoneForAuth`, which is scoped to `CLIENT`/`DRIVER` **on purpose**
+   *    — so an administrator changing to another administrator's number passes
+   *    the check, **spends an SMS**, and is refused only at confirm, by the
+   *    index. That breaks `PhoneVerificationService`'s own documented promise
+   *    that "a message is never spent on a doomed change" (research R10).
+   *  - **Active-agnostic**, because a deactivated account still HOLDS its
+   *    number: the unique index does not exempt it, so a change onto it would
+   *    fail at confirm for the same reason.
+   *
+   * Used **only** by that pre-check. `findByPhoneForAuth` and
+   * `findSingleActiveAdminByPhone` are NOT modified — both are load-bearing for
+   * sign-in and their scoping is deliberate and commented (FR-075). Widening
+   * either would make the `'N/A'` placeholder `seed-super-admin.ts` writes
+   * resolve to a login, which is the exact thing their narrowness prevents.
+   *
+   * Anonymous with respect to tenancy: the caller must run this inside
+   * `TenantContextService.runUnscoped`, since phone uniqueness is platform-wide
+   * and a scoped query would miss a holder in another company.
+   */
+  async findAnyByPhone(phone: string): Promise<UserDocument | null> {
+    return this.userModel.findOne({ phone: phone.trim() }).exec();
+  }
+
   async findById(id: string | Types.ObjectId): Promise<UserDocument> {
     const user = await this.userModel.findById(id).exec();
     if (!user) {

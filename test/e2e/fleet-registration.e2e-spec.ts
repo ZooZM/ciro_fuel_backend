@@ -88,6 +88,56 @@ describe('Fleet registration — trucks, tanks, credentials (spec 008 US1)', () 
     expect(tankList.body.items.map((t: { code: string }) => t.code)).toContain('FLEET-T053-TANK');
   });
 
+  // A truck and a tank are picked side by side in one assignment dialog and
+  // their ids are sent together to `POST /dispatch/orders/:id/assign`, so the
+  // two responses must name an id the same way. They did not: tanks returned
+  // the raw document (`_id`) while trucks returned a mapped `id`, so a caller
+  // holding one shape for both read `undefined` and either sent an unusable
+  // `tankId` or, guarding on its own empty value first, sent nothing at all.
+  // Asserted on BOTH resources in one test, because the defect is the
+  // disagreement rather than either shape on its own.
+  it('names an id the same way on trucks and on tanks (assignment sends both together)', async () => {
+    const truck = await request(server)
+      .post('/api/v1/trucks')
+      .set('Authorization', `Bearer ${adminA()}`)
+      .send({ plateNumber: 'FLEET-IDPARITY' })
+      .expect(201);
+    const tank = await request(server)
+      .post('/api/v1/tanks')
+      .set('Authorization', `Bearer ${adminA()}`)
+      .send({
+        code: 'FLEET-IDPARITY-TANK',
+        material: 'IRON',
+        maxCapacityLiters: 30_000,
+        fuelTypes: ['DIESEL'],
+      })
+      .expect(201);
+
+    for (const body of [truck.body, tank.body]) {
+      expect(typeof body.id).toBe('string');
+      expect(body).not.toHaveProperty('_id');
+      expect(body).not.toHaveProperty('__v');
+      // Optional on the schema (present ⇒ committed, FR-048f) — normalised so
+      // a free vehicle reads as `null` rather than as an absent key.
+      expect(body.activeOrderId).toBeNull();
+    }
+
+    const [truckList, tankList] = await Promise.all([
+      request(server)
+        .get('/api/v1/trucks')
+        .set('Authorization', `Bearer ${adminA()}`)
+        .expect(200),
+      request(server).get('/api/v1/tanks').set('Authorization', `Bearer ${adminA()}`).expect(200),
+    ]);
+    for (const items of [truckList.body.items, tankList.body.items]) {
+      expect(items.length).toBeGreaterThan(0);
+      for (const item of items) {
+        expect(typeof item.id).toBe('string');
+        expect(item).not.toHaveProperty('_id');
+      }
+    }
+  });
+
   it('refuses a duplicate plate within the company, and a duplicate tank code platform-wide (FR-048b)', async () => {
     await request(server)
       .post('/api/v1/trucks')
@@ -371,7 +421,7 @@ describe('Fleet registration — trucks, tanks, credentials (spec 008 US1)', () 
         fuelTypes: ['DIESEL'],
       })
       .expect(201);
-    const tankId = created.body._id;
+    const tankId = created.body.id;
 
     // No pairing or minting route exists for a tank — the truck's own verbs
     // must 404 here rather than quietly doing something.
@@ -419,7 +469,7 @@ describe('Fleet registration — trucks, tanks, credentials (spec 008 US1)', () 
 
     // Changing the material leaves the grades exactly as stated.
     const updated = await request(server)
-      .patch(`/api/v1/tanks/${iron.body._id}`)
+      .patch(`/api/v1/tanks/${iron.body.id}`)
       .set('Authorization', `Bearer ${adminA()}`)
       .send({ material: 'ALUMINIUM' })
       .expect(200);

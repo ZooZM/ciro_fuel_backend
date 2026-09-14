@@ -12,12 +12,9 @@ const TARGET = {
   coordinates: [39.1925, 21.4858] as [number, number],
 };
 
-function build(
-  transporters: { _id: string; deliveryRates: unknown[] }[],
-  distanceMeters: number | null = 50_000,
-) {
+function build(deliveryRates: unknown[], distanceMeters: number | null = 50_000) {
   const companies = {
-    findServingTransporters: jest.fn().mockResolvedValue(transporters),
+    findById: jest.fn().mockResolvedValue({ _id: 't1', deliveryRates }),
   } as unknown as CompaniesService;
   const warehouses = {
     findNearestSupplying: jest
@@ -27,100 +24,72 @@ function build(
   return new TransportPricingService(companies, warehouses);
 }
 
-describe('Transport price resolution — refuse rather than guess', () => {
-  it('prices from the transporter\'s own rate, floored by its minimum', async () => {
-    // 50 km × 1.8 = 90, which is below the 120 minimum: a short haul still costs a
-    // truck and a driver, so the floor is what is charged.
-    const service = build([
-      { _id: 't1', deliveryRates: [{ regionCode: RegionCode.MAKKAH, pricePerKm: 1.8, minPrice: 120 }] },
-    ]);
+/**
+ * The question this service answers changed shape.
+ *
+ * It used to be "what does the haul cost?" asked at QUOTE time, before anyone
+ * knew who would haul it — so it had to reason about every transporter serving
+ * the region at once, and two of its rules existed only to cope with not
+ * knowing: it refused outright when two candidates priced the same haul
+ * differently (`TRANSPORT_PRICE_AMBIGUOUS`, because choosing between them is
+ * the fuel company's call and had not been made), and it returned `null` when
+ * none served the region, so the caller could fall back to the FUEL company's
+ * own flat fee for a haul that company does not perform.
+ *
+ * It is now asked at ROUTING time, of ONE named company — the one that will
+ * actually do it. Both of those rules, and the tests that pinned them, are gone
+ * with the uncertainty that required them. What survives is everything about
+ * how a single company's rate turns into a fee.
+ */
+describe('Transport price for the company that will actually haul it', () => {
+  it("prices from the company's own rate, floored by its minimum", async () => {
+    // 50 km × 1.8 = 90, below the 120 minimum: a short haul still costs a truck
+    // and a driver, so the floor is what is charged.
+    const service = build([{ regionCode: RegionCode.MAKKAH, pricePerKm: 1.8, minPrice: 120 }]);
 
-    const resolved = await service.resolve('f1', TARGET, FuelType.DIESEL);
-
-    expect(resolved).toMatchObject({ fee: 120, distanceKm: 50, transportCompanyIds: ['t1'] });
+    expect(await service.feeForCompany('t1', TARGET, FuelType.DIESEL)).toBe(120);
   });
 
   it('uses per-km once it exceeds the floor', async () => {
     const service = build(
-      [{ _id: 't1', deliveryRates: [{ regionCode: RegionCode.MAKKAH, pricePerKm: 1.8, minPrice: 120 }] }],
+      [{ regionCode: RegionCode.MAKKAH, pricePerKm: 1.8, minPrice: 120 }],
       200_000,
     );
 
-    expect((await service.resolve('f1', TARGET, FuelType.DIESEL))!.fee).toBe(360);
+    expect(await service.feeForCompany('t1', TARGET, FuelType.DIESEL)).toBe(360);
   });
 
-  it('prefers a governorate rate over its own region\'s', async () => {
+  it("prefers a governorate rate over its own region's", async () => {
     // Without most-specific-first, a transporter could not charge more for one
     // hard-to-reach governorate without re-pricing the whole region.
     const service = build([
+      { regionCode: RegionCode.MAKKAH, pricePerKm: 1.8, minPrice: 120 },
       {
-        _id: 't1',
-        deliveryRates: [
-          { regionCode: RegionCode.MAKKAH, pricePerKm: 1.8, minPrice: 120 },
-          { regionCode: RegionCode.MAKKAH, governorateCode: GovernorateCode.JEDDAH, pricePerKm: 2.4, minPrice: 500 },
-        ],
+        regionCode: RegionCode.MAKKAH,
+        governorateCode: GovernorateCode.JEDDAH,
+        pricePerKm: 2.4,
+        minPrice: 500,
       },
     ]);
 
-    expect((await service.resolve('f1', TARGET, FuelType.DIESEL))!.fee).toBe(500);
+    expect(await service.feeForCompany('t1', TARGET, FuelType.DIESEL)).toBe(500);
   });
 
-  it('REFUSES when two serving transporters disagree on the price', async () => {
-    // The choice of hauler is the fuel company's, made at routing — AFTER the invoice
-    // is issued. Quoting the cheaper one would show the client a price the transporter
-    // who actually hauls never agreed to.
-    const service = build([
-      { _id: 't1', deliveryRates: [{ regionCode: RegionCode.MAKKAH, pricePerKm: 1.8, minPrice: 120 }] },
-      { _id: 't2', deliveryRates: [{ regionCode: RegionCode.MAKKAH, pricePerKm: 1.8, minPrice: 300 }] },
-    ]);
+  it('REFUSES when the chosen company has priced no covering area', async () => {
+    // The one refusal that survives, and it matters more than before: this
+    // company is the one that will haul the order. A price it never set is not
+    // a price, and routing to it would leave an order nobody can bill.
+    const service = build([]);
 
-    await expect(service.resolve('f1', TARGET, FuelType.DIESEL)).rejects.toMatchObject({
-      response: expect.objectContaining({ error: ErrorCode.TRANSPORT_PRICE_AMBIGUOUS }),
-    });
-  });
-
-  it('does NOT refuse when several transporters agree on the price', async () => {
-    // Ambiguity is about the price, not the head count — refusing here would block
-    // orders for no reason a client could act on.
-    const service = build([
-      { _id: 't1', deliveryRates: [{ regionCode: RegionCode.MAKKAH, pricePerKm: 1.8, minPrice: 120 }] },
-      { _id: 't2', deliveryRates: [{ regionCode: RegionCode.MAKKAH, pricePerKm: 1.8, minPrice: 120 }] },
-    ]);
-
-    const resolved = await service.resolve('f1', TARGET, FuelType.DIESEL);
-    expect(resolved!.fee).toBe(120);
-    expect(resolved!.transportCompanyIds).toEqual(['t1', 't2']);
-  });
-
-  it('REFUSES when a serving transporter has priced no covering area', async () => {
-    // Skipping the unpriced transporter would be worse: the fuel company may route
-    // this very order to it, and a price it never set is not a price.
-    const service = build([
-      { _id: 't1', deliveryRates: [{ regionCode: RegionCode.MAKKAH, pricePerKm: 1.8, minPrice: 120 }] },
-      { _id: 't2', deliveryRates: [] },
-    ]);
-
-    await expect(service.resolve('f1', TARGET, FuelType.DIESEL)).rejects.toMatchObject({
+    await expect(service.feeForCompany('t1', TARGET, FuelType.DIESEL)).rejects.toMatchObject({
       response: expect.objectContaining({ error: ErrorCode.TRANSPORT_PRICE_NOT_SET }),
     });
   });
 
-  it('returns null when no transporter serves the region at all', async () => {
-    // FR-016's pre-existing case: the order is placed, held at AWAITING_ROUTING and
-    // routed by hand. Refusing here would stop those clients ordering entirely — a
-    // change well beyond moving who sets the price. The caller falls back.
-    const service = build([]);
-
-    expect(await service.resolve('f1', TARGET, FuelType.DIESEL)).toBeNull();
-  });
-
   it('refuses when no warehouse supplies the grade, since there is no distance', async () => {
-    const service = build(
-      [{ _id: 't1', deliveryRates: [{ regionCode: RegionCode.MAKKAH, pricePerKm: 1.8, minPrice: 120 }] }],
-      null,
-    );
+    const service = build([{ regionCode: RegionCode.MAKKAH, pricePerKm: 1.8, minPrice: 120 }], null);
 
-    await expect(service.resolve('f1', TARGET, FuelType.DIESEL)).rejects.toBeInstanceOf(
+    await expect(service.feeForCompany('t1', TARGET, FuelType.DIESEL)).rejects.toBeInstanceOf(
       ConflictException,
     );
   });

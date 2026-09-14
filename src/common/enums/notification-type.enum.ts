@@ -54,4 +54,19 @@ export enum NotificationType {
   // proposed, on withdrawal (FR-016, FR-030a, FR-031). Deliberately carries NO company
   // name and NO price — a non-winner learns only that the offer closed.
   EXCHANGE_OFFER_CLOSED = 'EXCHANGE_OFFER_CLOSED',
+
+  // spec 017 (operator dashboard) T101/FR-048 — a platform-wide message from
+  // the operator to company administrators.
+  //
+  // Every recipient is an administrator (FUEL_COMPANY_ADMIN or
+  // TRANSPORT_COMPANY_ADMIN), and NO administrator has a mobile persona: the
+  // three admin roles live on the web dashboard alone. So no Flutter client
+  // will ever receive this type — its arrival there would be unreachable, not
+  // merely unhandled. It still has to be mirrored into the Flutter enum,
+  // because spec 007 installed a parity test pinning that enum to these exact
+  // wire values, and that test is a pre-deploy gate. Follows feature 016's
+  // precedent for its own exchange types.
+  //
+  // Payload carries `announcementId`, `title` and `body`.
+  PLATFORM_ANNOUNCEMENT = 'PLATFORM_ANNOUNCEMENT',
 }

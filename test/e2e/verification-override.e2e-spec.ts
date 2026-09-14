@@ -3,7 +3,7 @@ import { createHmac } from 'node:crypto';
 import { INestApplication } from '@nestjs/common';
 import { ResilientThrottlerStorage } from '../../src/common/throttler/resilient-throttler.storage';
 import { createTestApp, TestAppContext } from '../utils/test-app.factory';
-import { resetFixtureDispatchState, seedTwoCompanies, TwoCompanyFixture } from '../utils/fixtures';
+import { resetFixtureDispatchState, seedTwoCompanies, TwoCompanyFixture, settleClientReview } from '../utils/fixtures';
 import { OrderStatus } from '../../src/common/enums/order-status.enum';
 import { UserRole } from '../../src/common/enums/user-role.enum';
 
@@ -82,6 +82,7 @@ describe('Verification override (spec 008 FR-047)', () => {
       .send(rawBody)
       .expect(201);
 
+    await settleClientReview(app, orderId);
     await request(server)
       .post(`/api/v1/dispatch/orders/${orderId}/assign`)
       .set('Authorization', `Bearer ${transportAdmin.token}`)

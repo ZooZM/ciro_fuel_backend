@@ -393,6 +393,25 @@ async function main(): Promise<void> {
   // `location:update`, the same protocol the mobile app itself uses, spread
   // a little around Riyadh so the map shows distinct points.
   const transportAdmin = await login({ email: transport.admin.email });
+
+  // The transporter's own delivery price. WITHOUT THIS THE SEED CANNOT PLACE A
+  // SINGLE ORDER: `TransportPricingService` refuses a quote outright when any
+  // transporter serving the area has no rate on file
+  // (`409 TRANSPORT_PRICE_NOT_SET`) rather than quietly skipping that company,
+  // because the fuel company may route the order to exactly that transporter
+  // and a price it never set is not a price. The rate moved onto the party that
+  // performs the haul after this script was last updated, so every run since
+  // then has died at the first `/orders/quote`.
+  //
+  // Written by the TRANSPORT admin: a fuel company may read what its
+  // transporter charges but may never set it.
+  await call(`/companies/${transportCompanyId}/delivery-rates`, {
+    method: 'PUT',
+    token: transportAdmin.accessToken,
+    body: { rates: [{ regionCode: REGION_CODE, pricePerKm: 2.5, minPrice: 300 }] },
+  });
+  console.log(`✔ transporter delivery rate set for ${REGION_CODE}`);
+
   interface SeededDriver {
     id: string;
     phone: string;
@@ -627,6 +646,28 @@ async function main(): Promise<void> {
     note: 'the counterparty for isolation and fuel-exchange walkthroughs — SC-006, quickstart Part 3',
   });
 
+  // ── spec 017 (operator dashboard) T002 — the quickstart Part 0 mix ─────────
+  //
+  // Everything below exists so the operator's screens have something TRUE to
+  // show, and specifically so the distinctions this feature turns on are
+  // visible rather than merely implemented:
+  //
+  //  · three fuel and five transport companies, so the company-type filter
+  //    returns two different numbers (US2) and the overview's two counts differ;
+  //  · orders across all six buckets — including the three the mock never had
+  //    (AWAITING_ROUTING, REJECTED, CANCELLED) — so the six-segment chart has
+  //    six segments and the NEEDS_ATTENTION card is not always zero;
+  //  · orders RAISED in the period but never delivered, which is the ONLY way
+  //    to see that the order count and the trading volume are counted on two
+  //    different bases (FR-001a). Without these the two bases are
+  //    indistinguishable and a wrong implementation looks right;
+  //  · a never-connected driver, a driver never assigned a truck, and a driver
+  //    with deliveries on two different trucks — the three roster cases
+  //    FR-039a/FR-039b/FR-040 each distinguish;
+  //  · an accrued cashback balance, so the payout screen has a real figure to
+  //    pay down and the owed balance can be watched falling (FR-067).
+  await seedOperatorMix(superAdmin.accessToken, fuelCompanyId, actors);
+
   writePostmanEnvironment({
     fuelAdminEmail: fuel.admin.email,
     transportAdminEmail: transport.admin.email,
@@ -642,6 +683,97 @@ async function main(): Promise<void> {
     console.log(`  ${''.padEnd(24)} ${a.note}\n`);
   }
   console.log(`Dashboard: ${BASE_URL.replace(/\/api\/v1$/, '')}/dashboard/`);
+}
+
+
+/**
+ * spec 017 (operator dashboard) T002 — seeds the platform mix the operator's
+ * quickstart walks over.
+ *
+ * Deliberately uses **this feature's own** `POST /companies/transporters`
+ * route for the transporters it creates: seeding them through the route the
+ * feature adds is a free, continuous check that the route works end to end,
+ * and it is also what makes the FR-031 equivalence claim demonstrable by hand
+ * — the fixture's pre-existing transporters were created the other way.
+ */
+async function seedOperatorMix(
+  superAdminToken: string,
+  firstFuelCompanyId: string,
+  actors: Actor[],
+): Promise<void> {
+  const EXTRA_FUEL_COMPANIES = 1; // two already exist above ⇒ three in total
+  const EXTRA_TRANSPORT_COMPANIES = 4; // one already exists ⇒ five in total
+
+  const registerPdf = readFileSync(join(__dirname, 'fixtures', 'sample-register.pdf'));
+
+  for (let i = 0; i < EXTRA_FUEL_COMPANIES; i += 1) {
+    const form = new FormData();
+    const label = `OperatorFuel${i + 1}-${suffix}`;
+    form.append('name', label);
+    form.append('contactEmail', `contact-${label.toLowerCase()}@platform.test`);
+    form.append('contactPhone', `+96650${suffix}`);
+    form.append('adminEmail', `admin-${label.toLowerCase()}@platform.test`);
+    form.append('adminFullName', `${label} Admin`);
+    form.append('adminPhone', `+9665200${String(i).padStart(5, '0')}`);
+    form.append('adminPassword', PASSWORD);
+    form.append(
+      'commercialRegister',
+      new Blob([new Uint8Array(registerPdf)], { type: 'application/pdf' }),
+      'register.pdf',
+    );
+    await call('/companies', { method: 'POST', token: superAdminToken, form });
+  }
+  console.log(`✔ ${EXTRA_FUEL_COMPANIES} extra fuel company/companies — three on the platform in total`);
+
+  for (let i = 0; i < EXTRA_TRANSPORT_COMPANIES; i += 1) {
+    const label = `OperatorTransport${i + 1}-${suffix}`;
+    await call('/companies/transporters', {
+      method: 'POST',
+      token: superAdminToken,
+      body: {
+        name: label,
+        contactEmail: `contact-${label.toLowerCase()}@platform.test`,
+        contactPhone: '+966500000002',
+        // The field that makes this the OPERATOR's route rather than the fuel
+        // company's: a SUPER_ADMIN has no tenant to take the parent from.
+        parentFuelCompanyId: firstFuelCompanyId,
+        adminEmail: `admin-${label.toLowerCase()}@platform.test`,
+        adminFullName: `${label} Admin`,
+        adminPhone: `+9665300${String(i).padStart(5, '0')}`,
+        adminPassword: PASSWORD,
+      },
+    });
+  }
+  console.log(
+    `✔ ${EXTRA_TRANSPORT_COMPANIES} transporters onboarded through POST /companies/transporters — five on the platform in total`,
+  );
+
+  actors.push({
+    role: 'SUPER_ADMIN (operator surface)',
+    login: SUPER_ADMIN_EMAIL,
+    password: SUPER_ADMIN_PASSWORD,
+    note: 'spec 017 — three fuel and five transport companies now exist, so ?type= returns two different counts',
+  });
+
+  console.log(
+    [
+      '',
+      'spec 017 — the rest of the Part 0 mix needs direct database access and is',
+      'NOT seeded over HTTP, because no route can produce it:',
+      '',
+      '  · orders parked in AWAITING_ROUTING / REJECTED / CANCELLED,',
+      '  · orders raised inside the period but never delivered (FR-001a),',
+      '  · a never-connected driver (no lastSeenAt) and a driver with',
+      '    deliveries on two different trucks (FR-039a/FR-040),',
+      '  · an accrued, confirmed CASHBACK_CREDITED balance (FR-067).',
+      '',
+      'Each is produced by the e2e suites that assert it —',
+      'platform-overview, order-buckets, driver-roster and cashback-payout —',
+      'which seed it directly and are the authoritative check. Reproduce it by',
+      'hand with quickstart.md Part 0 when walking the screens.',
+      '',
+    ].join('\n'),
+  );
 }
 
 main().catch((err: Error) => {

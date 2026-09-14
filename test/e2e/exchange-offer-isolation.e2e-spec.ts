@@ -12,6 +12,16 @@ import { ProposalOutcome } from '../../src/common/enums/proposal-outcome.enum';
 
 jest.setTimeout(120_000);
 
+/** Every number anywhere in a payload — see the call site for why by value. */
+function numericValuesIn(value: unknown): number[] {
+  if (typeof value === 'number') return [value];
+  if (Array.isArray(value)) return value.flatMap(numericValuesIn);
+  if (value && typeof value === 'object') {
+    return Object.values(value as Record<string, unknown>).flatMap(numericValuesIn);
+  }
+  return [];
+}
+
 /**
  * spec 016 (broadcast fuel exchange offers) T024/T025 — Slice 0's gate (T026): every
  * non-negotiable case in `contracts/isolation-contract.md`, over the THREE-fuel-company
@@ -158,9 +168,14 @@ describe('Exchange offer isolation (Slice 0 gate, contracts/isolation-contract.m
     expect(String(seenByB[0].proposingCompanyId)).toBe(companyIdB);
     expect(seenByB[0].unitPrice).toBe(2.2);
     // The raw payload contains no trace of the rival's price or identity.
-    const serialized = JSON.stringify(seenByB.map((p) => p.toObject()));
-    expect(serialized).not.toContain('9.99');
-    expect(serialized).not.toContain(companyIdC);
+    // The price is checked by VALUE: `not.toContain('9.99')` over the
+    // serialised form also matches an ISO timestamp reading `…:09.990Z`, so it
+    // would fail on the clock rather than on a leak — feature 011's `'950'`
+    // defect, which that suite fixed and this one did not adopt. An ObjectId
+    // stays a substring check: 24 hex characters cannot collide with a time.
+    const objects = seenByB.map((p) => p.toObject());
+    expect(numericValuesIn(objects)).not.toContain(9.99);
+    expect(JSON.stringify(objects)).not.toContain(companyIdC);
   });
 
   // --- Case 5: the raiser sees BOTH proposals and both proposers' contacts ---------

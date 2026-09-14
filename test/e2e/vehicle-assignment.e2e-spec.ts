@@ -8,13 +8,13 @@ import {
   DEFAULT_PASSWORD,
   seedTwoCompanies,
   TwoCompanyFixture,
-  uniquePhone,
-} from '../utils/fixtures';
+  uniquePhone, settleClientReview } from '../utils/fixtures';
 import { UsersService } from '../../src/modules/users/users.service';
 import { AuthService } from '../../src/modules/auth/auth.service';
 import { TrucksService } from '../../src/modules/trucks/trucks.service';
 import { TanksService } from '../../src/modules/tanks/tanks.service';
 import { CompaniesService } from '../../src/modules/companies/companies.service';
+import { RegionCode } from '../../src/common/enums/region.enum';
 import { Company, CompanyDocument } from '../../src/modules/companies/schemas/company.schema';
 import { User, UserDocument } from '../../src/modules/users/schemas/user.schema';
 import { Truck, TruckDocument } from '../../src/modules/trucks/schemas/truck.schema';
@@ -149,6 +149,14 @@ describe('Vehicle assignment — driver, truck, tank (spec 008 US2)', () => {
       await authService.login({ email: emptyAdmin.email, password: DEFAULT_PASSWORD })
     ).accessToken;
 
+    // Routing to a transporter that has priced no area is refused — the
+    // delivery leg is priced by the company that performs it. This one has an
+    // empty FLEET, which is the point of the fixture; it still needs a rate,
+    // or the order never reaches the assignment refusal under test.
+    await companiesService.setDeliveryRates(String(emptyTransport._id), [
+      { regionCode: RegionCode.RIYADH, pricePerKm: 0, minPrice: 30 },
+    ]);
+
     // T077 needs a grade the fuel company can PRICE but no warehouse can
     // SUPPLY — two independent gates that the fixture happens to fail at
     // the first one. Without this, a PETROL_95 order is refused at creation
@@ -220,6 +228,7 @@ describe('Vehicle assignment — driver, truck, tank (spec 008 US2)', () => {
       },
       'sadad-test-secret',
     );
+    await settleClientReview(app, orderId);
     await request(server)
       .post('/api/v1/payments/webhook/sadad')
       .set('Content-Type', 'application/json')
@@ -422,6 +431,7 @@ describe('Vehicle assignment — driver, truck, tank (spec 008 US2)', () => {
     );
 
     const next = await routedOrder();
+    await settleClientReview(app, next);
     const candidates = await request(server)
       .get(`/api/v1/dispatch/orders/${next}/candidates`)
       .set('Authorization', `Bearer ${fixtures.companyA.transportAdmin.token}`)
@@ -431,7 +441,10 @@ describe('Vehicle assignment — driver, truck, tank (spec 008 US2)', () => {
       (c: { _id: string }) => c._id === fixtures.companyA.driver.id,
     );
     // Derived from order history — research R4 forbids a stored lastTruckId.
-    expect(String(experienced.suggestedTruck?._id)).toBe(truck2);
+    // `id`, not `_id`: this is now mapped through the same safe truck shape as
+    // `GET /trucks`, which is what stops it carrying the vehicle's NFC card id
+    // and QR token to the assignment screen (FR-042).
+    expect(String(experienced.suggestedTruck?.id)).toBe(truck2);
 
     // A driver who has never driven gets an empty suggestion, not a guess.
     //
@@ -457,6 +470,7 @@ describe('Vehicle assignment — driver, truck, tank (spec 008 US2)', () => {
       location: { type: 'Point', coordinates: fixtures.companyA.driver.location } as never,
     });
 
+    await settleClientReview(app, next);
     const withRookie = await request(server)
       .get(`/api/v1/dispatch/orders/${next}/candidates`)
       .set('Authorization', `Bearer ${fixtures.companyA.transportAdmin.token}`)
@@ -482,6 +496,7 @@ describe('Vehicle assignment — driver, truck, tank (spec 008 US2)', () => {
     // truck2 stays committed to `first`. Offering it would invite a pick
     // that assignment would then refuse.
     const next = await routedOrder();
+    await settleClientReview(app, next);
     const busy = await request(server)
       .get(`/api/v1/dispatch/orders/${next}/candidates`)
       .set('Authorization', `Bearer ${fixtures.companyA.transportAdmin.token}`)
@@ -494,6 +509,7 @@ describe('Vehicle assignment — driver, truck, tank (spec 008 US2)', () => {
     // same consequence for the operator.
     await truckModel.updateOne({ _id: truck2 }, { $unset: { activeOrderId: '' } });
     await truckModel.updateOne({ _id: truck2 }, { $set: { isActive: false } });
+    await settleClientReview(app, next);
     const withdrawn = await request(server)
       .get(`/api/v1/dispatch/orders/${next}/candidates`)
       .set('Authorization', `Bearer ${fixtures.companyA.transportAdmin.token}`)
@@ -508,9 +524,25 @@ describe('Vehicle assignment — driver, truck, tank (spec 008 US2)', () => {
 
   it('refuses an order no warehouse can supply, before booking anything (FR-035f)', async () => {
     // The fixture warehouse supplies DIESEL and PETROL_91 only.
-    const orderId = await routedOrder(1000, FuelType.PETROL_95);
+    //
+    // The refusal now arrives EARLIER than it used to — at routing rather than
+    // at assignment. Routing has to price the haul, the haul is priced per
+    // kilometre from the supplying warehouse, and there is no such warehouse:
+    // the same `NO_WAREHOUSE_FOR_GRADE` that assignment used to raise is now
+    // raised before a transporter is committed at all.
+    //
+    // FR-035f's actual guarantee — "before booking anything" — holds a fortiori:
+    // nothing can have been booked, because the order never left APPROVED.
+    const createRes = await request(server)
+      .post('/api/v1/orders')
+      .set('Authorization', `Bearer ${fixtures.companyA.client.token}`)
+      .send({ fuelType: FuelType.PETROL_95, quantityLiters: 1000, paymentMethod: 'DEFERRED' })
+      .expect(201);
 
-    await assign(orderId, fixtures.companyA.driver.id, fixtures.companyA.truck.id, tank2)
+    await request(server)
+      .patch(`/api/v1/orders/${createRes.body._id}/approve`)
+      .set('Authorization', `Bearer ${fixtures.companyA.admin.token}`)
+      .send({})
       .expect(409)
       .then((res) => expect(res.body.error).toBe(ErrorCode.NO_WAREHOUSE_FOR_GRADE));
 

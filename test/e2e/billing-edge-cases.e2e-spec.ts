@@ -123,7 +123,10 @@ describe('Billing — cancellation & settlement edge cases (spec 004 US5)', () =
       .set('Authorization', `Bearer ${admin.token}`)
       .send({})
       .expect(200);
-    expect(approveRes.body.status).toBe(OrderStatus.ROUTED_TO_TRANSPORT);
+    // Routing now prices the haul and hands the order back to the station
+    // owner, so approval lands on PENDING_PAYMENT rather than going straight
+    // to the transporter; the settlement step below is what releases it.
+    expect(approveRes.body.status).toBe(OrderStatus.PENDING_PAYMENT);
 
     // A second credit order — refused while the first's 250 is still outstanding.
     const secondOrder = await request(server)
@@ -150,12 +153,28 @@ describe('Billing — cancellation & settlement edge cases (spec 004 US5)', () =
       .expect(200);
     expect(firstInvoice.body.state).toBe(InvoiceState.VOID);
 
-    const retryApprove = await request(server)
-      .patch(`/api/v1/orders/${secondOrder.body._id}/approve`)
+    // The retry is PATCH :id/route, not a second :id/approve.
+    //
+    // The credit check lives in invoice issuance, and the invoice is issued at
+    // ROUTING now — the first moment the total includes the haul. So the
+    // earlier refusal did not undo the approval, only the routing it was part
+    // of: that order is sitting at APPROVED, un-routed and uninvoiced, and
+    // approving it again is the one transition the state machine will not make
+    // twice. Routing it is what retries the part that actually failed.
+    const stillApproved = await request(server)
+      .get(`/api/v1/orders/${secondOrder.body._id}`)
       .set('Authorization', `Bearer ${admin.token}`)
-      .send({})
       .expect(200);
-    expect(retryApprove.body.status).toBe(OrderStatus.ROUTED_TO_TRANSPORT);
+    expect(stillApproved.body.status).toBe(OrderStatus.APPROVED);
+    expect(stillApproved.body.transportCompanyId).toBeFalsy();
+    expect(stillApproved.body.invoiceId).toBeFalsy();
+
+    const retryRoute = await request(server)
+      .patch(`/api/v1/orders/${secondOrder.body._id}/route`)
+      .set('Authorization', `Bearer ${admin.token}`)
+      .send({ transportCompanyId: fixtures.companyA.transportCompanyId })
+      .expect(200);
+    expect(retryRoute.body.status).toBe(OrderStatus.PENDING_PAYMENT);
   });
 
   it('settling an already-voided DEFERRED invoice is a no-op, never resurrected to SETTLED', async () => {
@@ -172,7 +191,10 @@ describe('Billing — cancellation & settlement edge cases (spec 004 US5)', () =
       .set('Authorization', `Bearer ${admin.token}`)
       .send({})
       .expect(200);
-    expect(approveRes.body.status).toBe(OrderStatus.ROUTED_TO_TRANSPORT);
+    // Routing now prices the haul and hands the order back to the station
+    // owner, so approval lands on PENDING_PAYMENT rather than going straight
+    // to the transporter; the settlement step below is what releases it.
+    expect(approveRes.body.status).toBe(OrderStatus.PENDING_PAYMENT);
 
     // Cancellable pre-assignment, same as any other ROUTED_TO_TRANSPORT order.
     await request(server)
@@ -206,7 +228,10 @@ describe('Billing — cancellation & settlement edge cases (spec 004 US5)', () =
       .set('Authorization', `Bearer ${admin.token}`)
       .send({})
       .expect(200);
-    expect(approveRes.body.status).toBe(OrderStatus.ROUTED_TO_TRANSPORT);
+    // Routing now prices the haul and hands the order back to the station
+    // owner, so approval lands on PENDING_PAYMENT rather than going straight
+    // to the transporter; the settlement step below is what releases it.
+    expect(approveRes.body.status).toBe(OrderStatus.PENDING_PAYMENT);
 
     const firstSettle = await request(server)
       .post(`/api/v1/invoices/${approveRes.body.invoiceId}/settle`)

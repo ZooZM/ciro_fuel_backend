@@ -61,13 +61,18 @@ it). The full journey now runs CIRO → Fuel Company → Transportation Company 
 # 6. login as the Transportation Company's admin → POST /users → create a DRIVER (+truck)
 # 7. login as client → POST /api/v1/orders {fuelType, quantityLiters, paymentMethod?}
 #    → estimatedPrice, status PENDING_APPROVAL (paymentMethod defaults to DIRECT)
-# 8. fuel admin → PATCH /orders/:id/approve {finalPrice?} → issues the invoice (FR-020);
-#    DIRECT → PENDING_PAYMENT (routing waits for settlement, FR-020a);
-#    DEFERRED/CREDIT → routes immediately: one serving transporter ⇒ ROUTED_TO_TRANSPORT,
-#    none ⇒ AWAITING_ROUTING (+ notified), several ⇒ AWAITING_ROUTING with routingCandidates
-#    (resolve via PATCH /orders/:id/route {transportCompanyId})
-# 9. [DIRECT only] simulate gateway: POST /api/v1/payments/webhook/sadad (body + X-Signature HMAC)
-#    → settles the invoice, order returns to APPROVED, then auto-routes (FR-020a)
+# 8. fuel admin → PATCH /orders/:id/approve {finalPrice?} → APPROVED, then ROUTES:
+#    one serving transporter ⇒ routed automatically, none ⇒ AWAITING_ROUTING (+ notified),
+#    several ⇒ AWAITING_ROUTING with routingCandidates (resolve via PATCH /orders/:id/route).
+#    Routing prices the haul from the chosen transporter's OWN rate, issues the invoice
+#    (FR-020) and hands the order back to the station owner ⇒ PENDING_PAYMENT (FR-020a).
+#    EVERY payment method goes through that review: until a transporter is chosen,
+#    nobody can say what the delivery costs.
+# 9. station owner reviews the real total (fuel + the actual transport price) and either
+#    DIRECT ⇒ pays: POST /api/v1/payments/webhook/sadad (body + X-Signature HMAC);
+#    DEFERRED/CREDIT ⇒ accepts: POST /api/v1/orders/:id/accept (no deadline, FR-020b);
+#    refuses ⇒ PATCH /orders/:id/cancel. Either confirmation returns the order to
+#    ROUTED_TO_TRANSPORT so a driver can be assigned (FR-020a).
 # 10. transport admin → GET /dispatch/orders/:id/candidates → POST /dispatch/orders/:id/assign
 #     {driverId} → ASSIGNED_TO_DRIVER → IN_TRANSIT (payment, if any, already happened before this)
 # 11. driver → POST /orders/:id/arrive ; client → GET /orders/:id/otp/current ; driver → verify-arrival → UNLOADING

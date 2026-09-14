@@ -122,13 +122,13 @@ async function main(): Promise<void> {
 
   // Ensure an active tank exists, sized and graded for this order.
   const tanks = await call<{
-    items: Array<{ _id: string; isActive: boolean; activeOrderId?: string; maxCapacityLiters: number; fuelTypes: string[] }>;
+    items: Array<{ id: string; isActive: boolean; activeOrderId?: string | null; maxCapacityLiters: number; fuelTypes: string[] }>;
   }>('/tanks', { method: 'GET', token: transportAdmin.accessToken });
   let tankId = tanks.items.find(
     (t) => t.isActive && !t.activeOrderId && t.maxCapacityLiters >= QUANTITY_LITERS && t.fuelTypes.includes(FUEL_TYPE),
-  )?._id;
+  )?.id;
   if (!tankId) {
-    const tank = await call<{ _id: string }>('/tanks', {
+    const tank = await call<{ id: string }>('/tanks', {
       method: 'POST',
       token: transportAdmin.accessToken,
       body: {
@@ -138,7 +138,7 @@ async function main(): Promise<void> {
         fuelTypes: ['DIESEL', 'PETROL_91', 'PETROL_95', 'KEROSENE'],
       },
     });
-    tankId = tank._id;
+    tankId = tank.id;
     console.log(`✔ created tank ${tankId}`);
   } else {
     console.log(`✔ reusing tank ${tankId}`);

@@ -16,6 +16,9 @@ import { AuthenticatedUser } from '../../common/interfaces/jwt-payload.interface
 import { UsersService } from '../users/users.service';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { StationsService } from '../stations/stations.service';
+import { SessionAuditService } from '../sessions/session-audit.service';
+import { Roles } from '../../common/decorators/roles.decorator';
+import { OperatorAccountDto } from './dto/operator-account.dto';
 
 @Controller({ path: 'auth', version: '1' })
 export class AuthController {
@@ -25,6 +28,7 @@ export class AuthController {
     private readonly stationsService: StationsService,
     private readonly passwordResetService: PasswordResetService,
     private readonly loginCodeService: LoginCodeService,
+    private readonly sessionAudit: SessionAuditService,
   ) {}
 
   @Public()
@@ -120,6 +124,43 @@ export class AuthController {
       // endpoint and must not notice the migration underneath it.
       station: await this.resolveStation(fullUser),
       creditLimit: fullUser.creditLimit,
+    };
+  }
+
+  /**
+   * spec 017 (operator dashboard) T123/FR-057–FR-059/FR-063 — the operator's
+   * own account.
+   *
+   * A SEPARATE route rather than fields added to `GET /auth/me` above, which
+   * both Flutter clients call and which FR-075 freezes. Exposed to
+   * `SUPER_ADMIN` alone for now (FR-074); nothing about the shape prevents the
+   * other administrator roles being added later.
+   *
+   * `activeSessionCount` reads `User.activeSessions.length` — the live array,
+   * feature 015's concurrent-session model. `lastSignInAt` reads the newest
+   * `SIGNED_IN` audit event instead, because that array holds only CURRENT
+   * sessions: it empties on sign-out, so reading a last-sign-in time from it
+   * would report "never" for an administrator who signs in and out daily. The
+   * audit log is append-only and TTL-free, so it stays correct (research R10).
+   */
+  @Roles(UserRole.SUPER_ADMIN)
+  @Get('me/account')
+  async meAccount(@CurrentUser() user: AuthenticatedUser): Promise<OperatorAccountDto> {
+    const [fullUser, lastSignInAt] = await Promise.all([
+      this.usersService.findById(user.userId),
+      this.sessionAudit.lastSignInAt(user.userId),
+    ]);
+    return {
+      fullName: fullUser.fullName,
+      email: fullUser.email,
+      // FR-057: the REAL sign-in identifier. The mock rendered a mask, which
+      // is worse than useless on this screen — an operator checking which
+      // number they sign in with cannot read it off a mask.
+      phone: fullUser.phone,
+      activeSessionCount: fullUser.activeSessions?.length ?? 0,
+      lastSignInAt: lastSignInAt ? lastSignInAt.toISOString() : null,
+      // No permission list and no account statistic — the platform records
+      // neither, so neither is fabricated here (FR-063).
     };
   }
 

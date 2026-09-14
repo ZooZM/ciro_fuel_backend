@@ -15,13 +15,6 @@ export interface DeliveryTarget {
   coordinates: [number, number];
 }
 
-export interface ResolvedTransportPrice {
-  fee: number;
-  distanceKm: number;
-  /** Every transporter whose rate produced this fee — one, or several that agree. */
-  transportCompanyIds: string[];
-}
-
 /**
  * Resolves what delivery costs, from the rates the TRANSPORT companies set
  * themselves (`Company.deliveryRates`) rather than from the fuel company's flat
@@ -68,24 +61,39 @@ export class TransportPricingService {
   }
 
   /**
-   * `null` when NO transporter of this fuel company serves the region at all.
+   * What THIS transport company charges to haul THIS order.
    *
-   * That is not an error here and must not be: it is the pre-existing FR-016 case,
-   * where an order is placed, held at AWAITING_ROUTING, and routed by hand later.
-   * Refusing it at quote time would stop clients in an unserved region from ordering
-   * at all — a behaviour change well beyond moving who sets the price. The caller
-   * falls back to the fuel company's own configured fee for that case alone.
+   * The delivery leg is priced by the company that performs it, and that
+   * company is chosen at routing — so this is called once, by
+   * `RoutingService`, at the moment routing resolves, and never before.
+   *
+   * It replaces the old `resolve()`, which had to answer the same question
+   * before anyone knew who the hauler would be. That forced two rules the
+   * platform no longer needs: it REFUSED the whole quote when any serving
+   * transporter had not set a rate (`TRANSPORT_PRICE_NOT_SET`, even when the
+   * order would never be routed to that one), and it refused again when two
+   * candidates priced the same haul differently (`TRANSPORT_PRICE_AMBIGUOUS`),
+   * because choosing between them is the fuel company's call and had not been
+   * made yet. Asking after the choice makes both questions disappear.
+   *
+   * Still throws `TRANSPORT_PRICE_NOT_SET` when the CHOSEN company has no rate
+   * for this area — a price it never set is not a price, and routing to it
+   * would leave an order nobody can bill.
    */
-  async resolve(
-    fuelCompanyId: string,
+  async feeForCompany(
+    transportCompanyId: string,
     target: DeliveryTarget,
     fuelType: FuelType,
-  ): Promise<ResolvedTransportPrice | null> {
-    const candidates = await this.companiesService.findServingTransporters(
-      fuelCompanyId,
-      target.regionCode,
-    );
-    if (candidates.length === 0) return null;
+  ): Promise<number> {
+    const company = await this.companiesService.findById(transportCompanyId);
+    const rate = this.rateFor(company.deliveryRates ?? [], target);
+    if (!rate) {
+      throw new ConflictException({
+        error: ErrorCode.TRANSPORT_PRICE_NOT_SET,
+        message:
+          'The transport company this order was routed to has not set a delivery price for this area',
+      });
+    }
 
     const warehouse = await this.warehousesService.findNearestSupplying(
       target.coordinates,
@@ -103,37 +111,6 @@ export class TransportPricingService {
         ? (warehouse as unknown as { distanceMeters: number }).distanceMeters / 1000
         : 0;
 
-    const priced: { companyId: string; fee: number }[] = [];
-    for (const candidate of candidates) {
-      const rate = this.rateFor(candidate.deliveryRates ?? [], target);
-      if (!rate) {
-        // One unpriced serving transporter blocks the quote, rather than being
-        // quietly skipped: the fuel company may route the order to exactly that
-        // transporter, and a price it never set is not a price.
-        throw new ConflictException({
-          error: ErrorCode.TRANSPORT_PRICE_NOT_SET,
-          message: 'A transport company serving this area has not set its delivery price',
-        });
-      }
-      priced.push({
-        companyId: String(candidate._id),
-        fee: roundCurrency(Math.max(rate.minPrice, distanceKm * rate.pricePerKm)),
-      });
-    }
-
-    const fees = new Set(priced.map((p) => p.fee));
-    if (fees.size > 1) {
-      throw new ConflictException({
-        error: ErrorCode.TRANSPORT_PRICE_AMBIGUOUS,
-        message:
-          'More than one transport company serves this area at different prices — the fuel company must choose one before this order can be priced',
-      });
-    }
-
-    return {
-      fee: priced[0].fee,
-      distanceKm,
-      transportCompanyIds: priced.map((p) => p.companyId),
-    };
+    return roundCurrency(Math.max(rate.minPrice, distanceKm * rate.pricePerKm));
   }
 }

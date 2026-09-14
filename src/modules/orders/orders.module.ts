@@ -6,7 +6,7 @@ import { OrdersController } from './orders.controller';
 import { EtaService } from './eta.service';
 import { RouteService } from './route.service';
 import { PricingService } from './services/pricing.service';
-import { TransportPricingService } from './services/transport-pricing.service';
+import { TransportPricingModule } from './transport-pricing.module';
 import { OrderCoreModule } from './order-core.module';
 import { DispatchModule } from '../dispatch/dispatch.module';
 import { PaymentsModule } from '../payments/payments.module';
@@ -34,6 +34,10 @@ import { NullSupplierInvoiceExtractor } from './services/null-supplier-invoice-e
     OrderCoreModule,
     DispatchModule,
     PaymentsModule,
+    // `PricingService` still derives the quote here; the transport rate lookup
+    // it used to own now lives in a leaf module shared with `RoutingService`,
+    // which is what asks the question after routing resolves the hauler.
+    TransportPricingModule,
     CompaniesModule,
     UsersModule,
     NotificationsModule,
@@ -62,7 +66,6 @@ import { NullSupplierInvoiceExtractor } from './services/null-supplier-invoice-e
     EtaService,
     RouteService,
     PricingService,
-    TransportPricingService,
     VehicleVerificationService,
     SupplierInvoicesService,
     // T179/R8 — the null extractor is the default and, today, only binding for the port.

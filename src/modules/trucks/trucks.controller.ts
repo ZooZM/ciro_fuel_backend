@@ -18,6 +18,7 @@ import { UserRole } from '../../common/enums/user-role.enum';
 import { AuthenticatedUser } from '../../common/interfaces/jwt-payload.interface';
 import { ObjectIdPipe } from '../../common/pipes/object-id.pipe';
 import { TruckDocument } from './schemas/truck.schema';
+import { toSafeTruckShape } from './truck-shape';
 
 /**
  * FR-042: a truck's `nfcCardUid`/`qrToken` are credentials, never surfaced by
@@ -103,16 +104,11 @@ export class TrucksController {
     return user.companyId;
   }
 
+  // Delegates to the shared `toSafeTruckShape` so this controller and
+  // `DispatchController`'s `suggestedTruck` cannot disagree about what a truck
+  // discloses (FR-042) — they did, and the credential fields escaped through
+  // the one that had no mapping of its own.
   private toSafeShape(truck: TruckDocument) {
-    return {
-      id: String(truck._id),
-      companyId: String(truck.companyId),
-      plateNumber: truck.plateNumber,
-      model: truck.model ?? null,
-      hasCard: Boolean(truck.nfcCardUid),
-      hasCode: Boolean(truck.qrToken),
-      isActive: truck.isActive,
-      activeOrderId: truck.activeOrderId ? String(truck.activeOrderId) : null,
-    };
+    return toSafeTruckShape(truck);
   }
 }

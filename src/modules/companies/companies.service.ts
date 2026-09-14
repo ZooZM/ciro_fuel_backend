@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { ClientSession, Model, Types } from 'mongoose';
+import { ClientSession, FilterQuery, Model, Types } from 'mongoose';
 import { Company, CompanyDocument, DeliveryRate, PricingConfig } from './schemas/company.schema';
 import { CompanyStatus } from '../../common/enums/company-status.enum';
 import { CompanyType } from '../../common/enums/company-type.enum';
@@ -17,6 +17,20 @@ export interface CompanyScopingInfo {
   type: CompanyType;
   /** Set only when `type === TRANSPORT`. */
   parentFuelCompanyId?: string;
+}
+
+/**
+ * spec 017 (operator dashboard) FR-010/FR-011/FR-013 — the fields
+ * {@link CompaniesService.findAll} narrows on. Distinct named fields rather
+ * than a pre-built `Record` the caller assembles: the controller must not be
+ * able to hand this method a filter that silently drops the `id` narrowing
+ * FR-012 depends on.
+ */
+export interface CompanyListFilter {
+  /** Narrows to at most this one company — a Fuel Company admin's own tenant. */
+  id?: string;
+  type?: CompanyType;
+  status?: CompanyStatus;
 }
 
 @Injectable()
@@ -143,8 +157,32 @@ export class CompaniesService {
    * given `id` narrows to at most that one (a Fuel Company admin sees only
    * themselves — FR-004a's boundary applied to listing, not just lookup).
    */
-  findAll(id?: string): Promise<CompanyDocument[]> {
-    return this.companyModel.find(id ? { _id: id } : {}).exec();
+  /**
+   * spec 017 (operator dashboard) T026/FR-003 — how many companies of one type
+   * exist on the platform, right now.
+   *
+   * A point-in-time figure: deliberately NOT bounded by any period (FR-002).
+   * Changing the operator's date range must leave it unchanged — a company that
+   * exists, exists. `Company` carries no scoping plugin at all (it is the tenant
+   * root), so this counts the platform with no bypass involved and is safe only
+   * behind the `SUPER_ADMIN`-gated route that calls it.
+   */
+  countByType(type: CompanyType): Promise<number> {
+    return this.companyModel.countDocuments({ type }).exec();
+  }
+
+  findAll(filter: CompanyListFilter = {}): Promise<CompanyDocument[]> {
+    const query: FilterQuery<CompanyDocument> = {};
+    // spec 017 (operator dashboard) FR-012: `type` and `status` INTERSECT the
+    // `id` narrowing — they never replace it. A Fuel Company admin passing
+    // `?type=TRANSPORT` must still see only their own company (i.e. nothing),
+    // never every transporter on the platform. Building one object field by
+    // field is what makes that structural: there is no merge order in which a
+    // caller-supplied key could overwrite `_id`.
+    if (filter.id) query._id = filter.id;
+    if (filter.type) query.type = filter.type;
+    if (filter.status) query.status = filter.status;
+    return this.companyModel.find(query).exec();
   }
 
 

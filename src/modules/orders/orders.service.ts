@@ -15,7 +15,6 @@ import { UserRole } from '../../common/enums/user-role.enum';
 import { ErrorCode } from '../../common/enums/error-code.enum';
 import { PaymentMethod } from '../../common/enums/payment-method.enum';
 import { CreateOrderDto } from './dto/create-order.dto';
-import { CompaniesService } from '../companies/companies.service';
 import { UsersService } from '../users/users.service';
 import { AuthenticatedUser } from '../../common/interfaces/jwt-payload.interface';
 import { User, UserDocument } from '../users/schemas/user.schema';
@@ -33,6 +32,11 @@ import { CursorSortField } from '../../common/pagination/cursor.util';
 import { PricingService } from './services/pricing.service';
 import { StationsService } from '../stations/stations.service';
 import { OrderSummaryDto, FuelCompanySummaryDto } from './dto/order-summary.dto';
+import { PlatformSummaryDto } from './dto/platform-summary.dto';
+import {
+  ORDER_STATUS_BUCKETS,
+  OrderStatusBucket,
+} from '../../common/constants/order-status-buckets';
 import { LitreBalancesService, DrawdownResult } from '../litre-balances/litre-balances.service';
 
 export interface CreateOrderResult {
@@ -58,7 +62,10 @@ export class OrdersService {
     @InjectModel(Tank.name) private readonly tankModel: Model<TankDocument>,
     @InjectConnection() private readonly connection: Connection,
     private readonly tenantContext: TenantContextService,
-    private readonly companiesService: CompaniesService,
+    // `CompaniesService` is gone from here: its only use was the bare
+    // `getBasePrice` the unquoted creation path multiplied by the litre count.
+    // Pricing now goes through `PricingService` on both paths, which is the
+    // one place that knows about service fees and VAT.
     private readonly usersService: UsersService,
     private readonly orderStateService: OrderStateService,
     private readonly otpService: OtpService,
@@ -98,35 +105,51 @@ export class OrdersService {
 
     const client = await this.usersService.findById(clientUser.userId);
 
-    // spec 005 US2: a quoteToken (always sent by the real client app —
-    // T063) buys the itemised breakdown and the station snapshot it
-    // implies. Its absence falls back to the pre-005 bare-estimate path
-    // unchanged, which every pre-existing e2e suite outside this feature
-    // (dispatch, billing, tracking, presence) still exercises directly.
+    // spec 005 US2: a quoteToken (sent by the real client app — T063) buys the
+    // staleness check that a token exists for. Its absence no longer changes
+    // what the order COSTS, only what has been verified about that cost:
+    // `createPriced` re-validates the token against live rates, while the
+    // branch below simply reads those rates now.
     if (dto.quoteToken) {
       return this.createPriced(clientUser, client, dto);
     }
 
-    const basePrice = await this.companiesService.getBasePrice(clientUser.companyId, dto.fuelType);
-    if (basePrice === undefined) {
-      throw new BadRequestException(
-        `No base price configured for fuel type ${dto.fuelType} — contact your company admin`,
-      );
-    }
+    // `stationId` used to be read ONLY on the quoted path, so supplying it here
+    // was silently ignored: the order was created against the client's legacy
+    // embedded `client.station` instead, and carried no `stationId` at all. A
+    // station owner with three sites who ordered to the second one had the fuel
+    // scheduled to the first, with nothing anywhere reporting a mismatch. It is
+    // honoured here now, through the same ownership-checked lookup the quoted
+    // path uses — a station belonging to someone else is 404, not a silent
+    // fallback to the default.
+    const station = dto.stationId
+      ? await this.stationsService.findOwnedByClient(dto.stationId, clientUser.userId)
+      : null;
 
     const deliveryLocation = dto.deliveryLocation
       ? {
           type: 'Point',
           coordinates: [dto.deliveryLocation.longitude, dto.deliveryLocation.latitude],
         }
-      : client.station?.location;
+      : (station?.location ?? client.station?.location);
     if (!deliveryLocation) {
       throw new BadRequestException(
         'No delivery location provided and client has no station location on file',
       );
     }
 
-    const estimatedPrice = Number((basePrice * dto.quantityLiters).toFixed(2));
+    // Was `basePrice × litres` and nothing else — no service fee, no VAT — so
+    // an order placed without a quote was invoiced roughly 16% under one placed
+    // with it, and every downstream reader (approval, invoicing, credit)
+    // faithfully used the lower figure. Both paths now derive from the same
+    // live rates. Throws PRICING_NOT_CONFIGURED where the company has none,
+    // which is the same refusal `POST /orders/quote` already gives for that gap
+    // and strictly more informative than the old "no base price" message.
+    const priceBreakdown = await this.pricingService.priceWithoutQuote(
+      clientUser.companyId,
+      dto.fuelType,
+      dto.quantityLiters,
+    );
 
     return this.createWithDrawdown(clientUser, dto.fuelType, dto.quantityLiters, {
       fuelCompanyId: new Types.ObjectId(clientUser.companyId),
@@ -136,9 +159,11 @@ export class OrdersService {
       deliveryLocation,
       // Snapshotted once at creation (FR-009/FR-030/FR-012) — never
       // re-derived even if the client later edits their station address.
-      deliveryAddressText: client.station?.addressText ?? '',
+      deliveryAddressText: station?.addressText ?? client.station?.addressText ?? '',
+      ...(station ? { stationId: station._id } : {}),
+      priceBreakdown,
       status: OrderStatus.PENDING_APPROVAL,
-      estimatedPrice,
+      estimatedPrice: priceBreakdown.total,
       paymentMethod: dto.paymentMethod ?? PaymentMethod.DIRECT,
     });
   }
@@ -254,14 +279,54 @@ export class OrdersService {
    * `updatedAt` via Mongoose's own timestamps, and the mobile app's mapper
    * already reads `updatedAt` as its fallback for exactly this reason (see
    * `order.schema.ts`'s pagination index comment).
+   *
+   * spec 017 (operator dashboard) FR-016/FR-016a adds `bucket` and `orderId`.
+   *
+   * **`bucket` expands to `status: { $in: [...] }` and NEVER to a `$or`.** Both
+   * scoping plugins inject their own filter through `Query.where()`, which
+   * REPLACES a top-level key of the same name rather than merging it — the
+   * exact defect feature 016 hit on every `$or` it built over `ExchangeOffer`.
+   * A `$or` here would be silently discarded for a `FUEL_COMPANY_ADMIN` (whose
+   * scoped read injects one) and work perfectly for the operator (who bypasses
+   * both plugins), so the happy-path test would pass and the leak would ship.
+   * `status` collides with nothing either plugin injects, so `$in` is safe for
+   * every role (research R4).
    */
   findForUser(
     user: AuthenticatedUser,
-    filter: { status?: OrderStatus; cursor?: string },
+    filter: { status?: OrderStatus; bucket?: OrderStatusBucket; orderId?: string; cursor?: string },
   ): Promise<PaginatedResponse<OrderDocument>> {
     const query: Record<string, unknown> = {};
-    if (filter.status) {
-      query.status = filter.status;
+    // FR-016a: an exact identifier overrides both state filters. Search is
+    // identifier-only and that is a recorded decision, not an oversight —
+    // `Order` has no human reference field, its human-facing values are
+    // embedded snapshots, and the platform carries no text index anywhere, so
+    // free text would mean either a new index plus a migration or an unindexed
+    // scan of every order on the operator's most-used screen (research R13).
+    //
+    // No visibility check is needed here and none is wanted: the scoping
+    // plugins still apply, so a caller naming another tenant's order simply
+    // gets an empty page — never that order, and never a 403 that would
+    // confirm the id exists.
+    if (filter.orderId) {
+      // A malformed identifier is an empty page, not a 500 and not a 400. The
+      // value comes from a free-text search box, so "that is not an order
+      // identifier" and "no such order" are the same answer to the person
+      // typing; letting it reach Mongoose would raise a CastError instead.
+      if (!Types.ObjectId.isValid(filter.orderId)) {
+        return Promise.resolve({ items: [], nextCursor: null });
+      }
+      query._id = filter.orderId;
+    } else {
+      if (filter.bucket) {
+        query.status = { $in: [...ORDER_STATUS_BUCKETS[filter.bucket]] };
+      }
+      // A `status` supplied alongside a `bucket` narrows to that one state —
+      // the controller has already refused the case where it is not a member
+      // of the bucket, so this can only ever narrow within it.
+      if (filter.status) {
+        query.status = filter.status;
+      }
     }
     if (user.role === UserRole.CLIENT) {
       query.clientId = user.userId;
@@ -317,28 +382,66 @@ export class OrdersService {
           actor,
           { session, extraSet: { finalPrice, approvedBy: new Types.ObjectId(actor.actorId) } },
         );
-
-        await this.invoicesService.issueInvoice(approved, session);
-
-        if (approved.paymentMethod === PaymentMethod.DIRECT) {
-          approved = await this.enterPendingPayment(approved, actor, session);
-        }
       });
     } finally {
       await session.endSession();
     }
 
-    if (approved.status === OrderStatus.PENDING_PAYMENT) {
-      // Scheduled after commit, same pattern as dispatch/redispatch — a job
-      // referencing a rolled-back transaction would be worse than one
-      // scheduled a moment late.
-      await this.paymentTimeoutQueue.schedule(
-        String(approved._id),
-        this.getPaymentDeadlineMinutes(),
-      );
-    }
-
+    // NEITHER the invoice NOR the payment gate happens here any more.
+    //
+    // Both used to, because approval was thought to be the moment the total was
+    // settled. It is not: the delivery leg is priced by the transport company
+    // that performs it, and that company is not chosen until routing, one step
+    // later. An invoice issued here would have billed the fuel line alone, and
+    // a DIRECT order would have been made to pay before anyone could tell it
+    // what the haul cost.
+    //
+    // `RoutingService.awaitClientSettlement` now does both, at the first moment
+    // the total exists. `finalPrice` set above is the fuel-side figure and is
+    // superseded there — an admin's override of it still stands, and still
+    // suppresses the breakdown on the invoice exactly as it always did.
     return this.findById(String(approved._id));
+  }
+
+  /**
+   * The station owner has settled (DIRECT, via the payment webhook) or accepted
+   * (DEFERRED/CREDIT, via `POST /orders/:id/accept`) the total that routing
+   * priced. The order returns to the transporter it was already routed to, and
+   * the driver assignment waiting behind it can proceed.
+   */
+  async settleAndResume(order: OrderDocument, actor: TransitionActor): Promise<OrderDocument> {
+    const resumed = await this.orderStateService.transition(
+      order._id as Types.ObjectId,
+      OrderStatus.PENDING_PAYMENT,
+      OrderStatus.ROUTED_TO_TRANSPORT,
+      actor,
+      { extraUnset: ['paymentDeadline'] },
+    );
+    await this.paymentTimeoutQueue.cancel(String(order._id));
+    return resumed;
+  }
+
+  /**
+   * FR-021 as amended: a DEFERRED or CREDIT order has no gateway payment to
+   * make, so the station owner's review ends in an explicit acceptance of the
+   * total instead. Refusing is the ordinary client cancellation they already
+   * have — `PENDING_PAYMENT -> CANCELLED` is an edge the state machine has
+   * carried since spec 004, and it releases every booked resource.
+   */
+  async acceptFinalPrice(order: OrderDocument, actor: TransitionActor): Promise<OrderDocument> {
+    if (order.status !== OrderStatus.PENDING_PAYMENT) {
+      throw new ConflictException({
+        error: ErrorCode.ORDER_NOT_AWAITING_CONFIRMATION,
+        message: 'This order is not awaiting your confirmation',
+      });
+    }
+    if (order.paymentMethod === PaymentMethod.DIRECT) {
+      throw new ConflictException({
+        error: ErrorCode.ORDER_NOT_AWAITING_CONFIRMATION,
+        message: 'A DIRECT order is confirmed by paying it, not by accepting it',
+      });
+    }
+    return this.settleAndResume(order, actor);
   }
 
   /**
@@ -785,6 +888,58 @@ export class OrdersService {
       stationOwnersCount,
       stationsCount,
       creditOutstanding,
+    };
+  }
+
+  /**
+   * spec 017 (operator dashboard) T051/FR-023 — the platform-wide bucket counts
+   * behind the operator's summary cards, and (via
+   * `PlatformOverviewService`) behind the home screen's six-segment order
+   * chart. One computation feeds both, which is what stops the two screens
+   * disagreeing about what "in progress" means.
+   *
+   * Bounded by **`createdAt`** over **every** state — orders RAISED in the
+   * period, in whatever state they have since reached. That basis is what makes
+   * the six counts sum to the overview's `period.orderCount` (FR-001a): a
+   * delivered-only count would BE the `COMPLETED` bucket and force the other
+   * five structurally to zero, and the chart could never sum to the card above
+   * it.
+   *
+   * Counts go through `countDocuments`, which the multi-party plugin hooks — so
+   * this method needs no role branch and no unscoped mechanism. For the
+   * operator the plugin bypasses and the counts are genuinely platform-wide;
+   * for anyone else they would be scoped, which is why the route above it is
+   * `SUPER_ADMIN`-only (research R1).
+   */
+  async getPlatformSummary(from: Date, to: Date): Promise<PlatformSummaryDto> {
+    const buckets = Object.values(OrderStatusBucket);
+    const counts = await Promise.all(
+      buckets.map((bucket) =>
+        this.orderModel
+          .countDocuments({
+            // `$in`, never `$or` — see findForUser's note (research R4).
+            status: { $in: [...ORDER_STATUS_BUCKETS[bucket]] },
+            createdAt: { $gte: from, $lte: to },
+          })
+          .exec(),
+      ),
+    );
+
+    const byBucket = Object.fromEntries(
+      buckets.map((bucket, index) => [bucket, counts[index]]),
+    ) as Record<OrderStatusBucket, number>;
+
+    return {
+      from: from.toISOString(),
+      to: to.toISOString(),
+      buckets: byBucket,
+      // Summed from the same six figures rather than counted separately: a
+      // second `countDocuments({ createdAt })` could disagree with the sum of
+      // the buckets if the mapping ever stopped being total, and the operator
+      // would see a chart that does not add up to its own card with nothing
+      // saying which half is wrong. The exhaustiveness test is what guarantees
+      // this equals the platform's order count (FR-023d).
+      total: counts.reduce((sum, count) => sum + count, 0),
     };
   }
 }

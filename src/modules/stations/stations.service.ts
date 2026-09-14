@@ -54,6 +54,25 @@ export class StationsService {
   }
 
   /**
+   * spec 017 (operator dashboard) T027/FR-003 — every station on the platform.
+   *
+   * The same `countDocuments({})` as `countForCompany` above, and that is
+   * precisely why it needs its own name. The tenant plugin makes one call mean
+   * two different things depending on who is asking: for a fuel company admin
+   * it counts their own stations, for a `SUPER_ADMIN` (who bypasses the plugin)
+   * it counts the platform's. A call site reading `countForCompany()` inside
+   * the platform overview would say the OPPOSITE of what it does there —
+   * exactly the kind of line a later reader "corrects" by adding a company
+   * filter (research R6).
+   *
+   * No unscoped mechanism is involved: the operator's platform-wide reach is
+   * the plugin's existing role bypass (research R1).
+   */
+  countForPlatform(): Promise<number> {
+    return this.stationModel.countDocuments({}).exec();
+  }
+
+  /**
    * A CLIENT may write `isFavourite` and nothing else (FR-036b) — enforced
    * by the DTO at the controller boundary, reasserted here by only ever
    * setting this one field regardless of what's passed in.

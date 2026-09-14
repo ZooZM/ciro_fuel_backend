@@ -1,7 +1,7 @@
 import request from 'supertest';
 import { INestApplication } from '@nestjs/common';
 import { createTestApp, TestAppContext } from '../utils/test-app.factory';
-import { seedTwoCompanies, uniquePhone, TwoCompanyFixture } from '../utils/fixtures';
+import { seedTwoCompanies, uniquePhone, TwoCompanyFixture, settleClientReview } from '../utils/fixtures';
 import { UsersService } from '../../src/modules/users/users.service';
 import { TrucksService } from '../../src/modules/trucks/trucks.service';
 import { TanksService } from '../../src/modules/tanks/tanks.service';
@@ -50,7 +50,10 @@ describe('Assignment reason gate (spec 010 US1 — FR-007/FR-008)', () => {
       .set('Authorization', `Bearer ${fixtures.companyA.admin.token}`)
       .send({})
       .expect(200);
-    expect(approveRes.body.status).toBe(OrderStatus.ROUTED_TO_TRANSPORT);
+    // Routing now prices the haul and hands the order back to the station
+    // owner, so approval lands on PENDING_PAYMENT rather than going straight
+    // to the transporter; the settlement step below is what releases it.
+    expect(approveRes.body.status).toBe(OrderStatus.PENDING_PAYMENT);
     return orderId;
   }
 
@@ -96,6 +99,7 @@ describe('Assignment reason gate (spec 010 US1 — FR-007/FR-008)', () => {
     const server = app.getHttpServer();
     const { truckId, tankId } = await freshVehicle();
 
+    await settleClientReview(app, orderId);
     const refused = await request(server)
       .post(`/api/v1/dispatch/orders/${orderId}/assign`)
       .set('Authorization', `Bearer ${fixtures.companyA.transportAdmin.token}`)
@@ -103,6 +107,7 @@ describe('Assignment reason gate (spec 010 US1 — FR-007/FR-008)', () => {
       .expect(400);
     expect(refused.body.error).toBe(ErrorCode.ASSIGNMENT_REASON_REQUIRED);
 
+    await settleClientReview(app, orderId);
     const accepted = await request(server)
       .post(`/api/v1/dispatch/orders/${orderId}/assign`)
       .set('Authorization', `Bearer ${fixtures.companyA.transportAdmin.token}`)
@@ -142,6 +147,7 @@ describe('Assignment reason gate (spec 010 US1 — FR-007/FR-008)', () => {
     });
     const firstOrderId = await routeAnOrder();
     const firstVehicle = await freshVehicle();
+    await settleClientReview(app, firstOrderId);
     await request(app.getHttpServer())
       .post(`/api/v1/dispatch/orders/${firstOrderId}/assign`)
       .set('Authorization', `Bearer ${fixtures.companyA.transportAdmin.token}`)
@@ -154,6 +160,7 @@ describe('Assignment reason gate (spec 010 US1 — FR-007/FR-008)', () => {
 
     const secondOrderId = await routeAnOrder();
     const secondVehicle = await freshVehicle();
+    await settleClientReview(app, secondOrderId);
     const refused = await request(app.getHttpServer())
       .post(`/api/v1/dispatch/orders/${secondOrderId}/assign`)
       .set('Authorization', `Bearer ${fixtures.companyA.transportAdmin.token}`)
@@ -192,6 +199,7 @@ describe('Assignment reason gate (spec 010 US1 — FR-007/FR-008)', () => {
 
     const orderId = await routeAnOrder();
     const { truckId, tankId } = await freshVehicle();
+    await settleClientReview(app, orderId);
     const refused = await request(app.getHttpServer())
       .post(`/api/v1/dispatch/orders/${orderId}/assign`)
       .set('Authorization', `Bearer ${fixtures.companyA.transportAdmin.token}`)

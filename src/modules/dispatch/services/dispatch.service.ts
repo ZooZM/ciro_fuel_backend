@@ -61,6 +61,36 @@ export interface DriverCandidate {
   [field: string]: unknown;
 }
 
+/**
+ * The ONLY driver fields a candidate row may carry.
+ *
+ * `User.passwordHash` is declared `select: false`, which protects `find()` and
+ * **not** `aggregate()` — so the `$geoNear` branch below returned whole user
+ * documents, putting every driver's bcrypt hash, `activeSessions` and
+ * `sessionGeneration` on the wire to the transporter's assignment screen. An
+ * allowlist is used rather than an exclusion list so a field added to `User`
+ * later is absent by default instead of leaking until somebody notices.
+ *
+ * Everything here is either read by `classifyEligibility`/`getSuggestedTruck`
+ * below or named in the dashboard's own `Candidate` interface.
+ */
+const CANDIDATE_FIELDS = [
+  'companyId',
+  'fullName',
+  'phone',
+  'isActive',
+  'isOnline',
+  'isAvailable',
+  'activeOrderId',
+  'lastSeenAt',
+  'ratingAverage',
+  'ratingCount',
+] as const;
+
+const CANDIDATE_PROJECTION: Record<string, 1> = Object.fromEntries(
+  CANDIDATE_FIELDS.map((field) => [field, 1]),
+);
+
 @Injectable()
 export class DispatchService {
   constructor(
@@ -138,11 +168,27 @@ export class DispatchService {
     if (driver.isActive === false) {
       return DriverEligibility.INACTIVE;
     }
-    if (!driver.isOnline) {
-      return DriverEligibility.OFFLINE;
-    }
+    // BUSY is tested BEFORE OFFLINE, and the order is the behaviour.
+    //
+    // A driver can be both: holding a delivery and with their app shut. Read
+    // OFFLINE-first, such a driver was reported as OFFLINE — which FR-008 says
+    // is assignable with a recorded reason — so the assignment screen offered
+    // the reason dialog, the operator typed one, and the atomic booking below
+    // then refused with `409 DRIVER_NOT_ELIGIBLE` because `activeOrderId` was
+    // set all along. The operator was invited to do something the platform
+    // would never allow.
+    //
+    // BUSY is also the stronger fact and the more useful one: "on another
+    // delivery" tells an operator to pick someone else, where "offline" invites
+    // them to try. A driver stays BUSY for as long as they hold the order —
+    // `activeOrderId` is cleared only by delivery, cancellation or
+    // force-completion (`releaseDriverIfAssigned`) — so this classification now
+    // holds for exactly that long too.
     if (driver.isAvailable === false || driver.activeOrderId) {
       return DriverEligibility.BUSY;
+    }
+    if (!driver.isOnline) {
+      return DriverEligibility.OFFLINE;
     }
     return DriverEligibility.ELIGIBLE;
   }
@@ -466,6 +512,10 @@ export class DispatchService {
           query: { role: UserRole.DRIVER },
         },
       },
+      // AFTER the plugin's injected `$match`, which it splices in immediately
+      // after `$geoNear` (tenant-scope.plugin.ts) — so scoping still evaluates
+      // against the whole document and only the response is narrowed.
+      { $project: { ...CANDIDATE_PROJECTION, distanceMeters: 1 } },
     ]);
 
     // $geoNear silently omits any document missing the field it sorts by
@@ -477,6 +527,9 @@ export class DispatchService {
     // like the aggregate above.
     const neverLocated = await this.userModel
       .find({ role: UserRole.DRIVER, location: { $exists: false } })
+      // The same allowlist as the aggregate above, so the two branches cannot
+      // answer with different shapes.
+      .select(CANDIDATE_FIELDS.join(' '))
       .lean<DriverCandidate[]>()
       .exec();
 

@@ -32,13 +32,21 @@ describe('Fuel price changes do not alter orders already placed (FR-039)', () =>
     const server = app.getHttpServer();
     const { admin, client, companyId } = fixtures.companyA;
 
-    // Fixture seeds DIESEL at 2.5/L (test/utils/fixtures.ts).
+    // Fixture seeds DIESEL at 2.5/L with a 1% service fee and 15% VAT
+    // (test/utils/fixtures.ts). An order placed without a quote token is priced
+    // through the same derivation as a quoted one, so the estimate is the full
+    // total rather than the bare fuel line it used to be. Expressed as a
+    // function of the unit price, because what this test is about is which
+    // PRICE applies, not what the surrounding fees happen to be.
+    const pricedAt = (unitPrice: number) =>
+      Math.round(unitPrice * 500 * 1.01 * 1.15 * 100) / 100;
+
     const before = await request(server)
       .post('/api/v1/orders')
       .set('Authorization', `Bearer ${client.token}`)
       .send({ fuelType: 'DIESEL', quantityLiters: 500 })
       .expect(201);
-    expect(before.body.estimatedPrice).toBe(1250);
+    expect(before.body.estimatedPrice).toBeCloseTo(pricedAt(2.5), 2);
 
     // Replace the whole fuelPrices set (PUT is a full-array write) — DIESEL jumps to 9.99,
     // PETROL_91 carried forward unchanged so this isn't mistaken for clearing it.
@@ -58,7 +66,9 @@ describe('Fuel price changes do not alter orders already placed (FR-039)', () =>
       .get(`/api/v1/orders/${before.body._id}`)
       .set('Authorization', `Bearer ${admin.token}`)
       .expect(200);
-    expect(reread.body.estimatedPrice).toBe(1250);
+    // Unchanged — asserted against the order's own earlier value, so this
+    // cannot pass merely because both sides were recomputed the same new way.
+    expect(reread.body.estimatedPrice).toBe(before.body.estimatedPrice);
 
     // A new order placed after the change picks up the new rate — proving the earlier
     // order's stability isn't because the price write silently failed.
@@ -67,6 +77,6 @@ describe('Fuel price changes do not alter orders already placed (FR-039)', () =>
       .set('Authorization', `Bearer ${client.token}`)
       .send({ fuelType: 'DIESEL', quantityLiters: 500 })
       .expect(201);
-    expect(after.body.estimatedPrice).toBe(4995);
+    expect(after.body.estimatedPrice).toBeCloseTo(pricedAt(9.99), 2);
   });
 });

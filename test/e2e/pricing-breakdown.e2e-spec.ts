@@ -141,15 +141,19 @@ describe('Pricing breakdown (spec 005 D3/FR-011)', () => {
       .send({ fuelType: 'DIESEL', quantityLiters: 20000, stationId })
       .expect(201);
 
-    // The delivery leg is priced by the TRANSPORT company that performs it, so the
-    // rate that must move to stale a quote is the transporter's — changing the fuel
-    // company's own `pricingConfig.deliveryFee` no longer affects a quote at all
-    // wherever a transporter serves the region, and asserting on it here would have
-    // gone on passing for the wrong reason. `pricePerKm: 0` keeps the fee distance-
-    // independent, so 77 is exactly what the re-quote must come back with.
+    // A quote commits to the FUEL company's rates and nothing else, so the fuel
+    // price is what has to move to stale one.
+    //
+    // This used to change the TRANSPORTER's rate, which no longer touches a
+    // quote at all: the delivery leg is priced by whichever transporter routing
+    // later picks, and a quote is issued before that choice exists — so it can
+    // neither name a transport price nor be invalidated by one changing.
+    // Staling it that way would now simply never fire, and the test would have
+    // gone on passing only because the assertion below fired first.
     await companyModel.updateOne(
-      { _id: fixtures.companyA.transportCompanyId },
-      { $set: { 'deliveryRates.0.minPrice': 77 } },
+      { _id: fixtures.companyA.companyId },
+      { $set: { 'fuelPrices.$[grade].basePricePerLiter': 3.1 } },
+      { arrayFilters: [{ 'grade.fuelType': 'DIESEL' }] },
     );
 
     const staleRes = await request(server)
@@ -164,11 +168,16 @@ describe('Pricing breakdown (spec 005 D3/FR-011)', () => {
       })
       .expect(409);
     expect(staleRes.body.error).toBe(ErrorCode.QUOTE_STALE);
-    expect(staleRes.body.currentBreakdown.deliveryFee).toBe(77);
+    // The re-quote carries the NEW fuel price, and still no transport line —
+    // there is no transporter yet for one to come from.
+    expect(staleRes.body.currentBreakdown.unitPrice).toBe(3.1);
+    expect(staleRes.body.currentBreakdown.deliveryFee).toBeUndefined();
 
+    // Put the fixture's fuel price back for the tests that follow.
     await companyModel.updateOne(
       { _id: fixtures.companyA.companyId },
-      { $set: { 'pricingConfig.deliveryFee': 30 } },
+      { $set: { 'fuelPrices.$[grade].basePricePerLiter': 2.5 } },
+      { arrayFilters: [{ 'grade.fuelType': 'DIESEL' }] },
     );
 
     // --- QUOTE_EXPIRED: a malformed/garbage token decodes to nonsense and
@@ -211,15 +220,18 @@ describe('Pricing breakdown (spec 005 D3/FR-011)', () => {
       })
       .expect(201);
 
+    // AT CREATION the order carries exactly what was quoted — and neither
+    // carries a transport line, because no transporter has been chosen.
     expect(created.body.priceBreakdown).toEqual(
       expect.objectContaining({
         fuelLineTotal: quote.body.breakdown.fuelLineTotal,
-        deliveryFee: quote.body.breakdown.deliveryFee,
         serviceFee: quote.body.breakdown.serviceFee,
         tax: quote.body.breakdown.tax,
         total: quote.body.breakdown.total,
       }),
     );
+    expect(quote.body.breakdown).not.toHaveProperty('deliveryFee');
+    expect(created.body.priceBreakdown).not.toHaveProperty('deliveryFee');
 
     const approved = await request(server)
       .patch(`/api/v1/orders/${created.body._id}/approve`)
@@ -232,7 +244,26 @@ describe('Pricing breakdown (spec 005 D3/FR-011)', () => {
       .set('Authorization', `Bearer ${client.token}`)
       .expect(200);
 
-    expect(invoice.body.priceBreakdown).toEqual(created.body.priceBreakdown);
+    // AFTER ROUTING the order has been re-priced with the haul the chosen
+    // transporter charges, and THAT is what the invoice bills. The invariant
+    // FR-011e is really about still holds — an invoice's breakdown is its
+    // order's breakdown, and its total is the amount — it simply binds at the
+    // moment the order is fully priced rather than at creation.
+    const routedOrder = await request(server)
+      .get(`/api/v1/orders/${created.body._id}`)
+      .set('Authorization', `Bearer ${client.token}`)
+      .expect(200);
+
+    expect(routedOrder.body.priceBreakdown.deliveryFee).toBeGreaterThan(0);
+    expect(routedOrder.body.priceBreakdown.total).toBeGreaterThan(quote.body.breakdown.total);
+    expect(invoice.body.priceBreakdown).toEqual(routedOrder.body.priceBreakdown);
     expect(invoice.body.priceBreakdown.total).toBe(invoice.body.amount);
+    expect(routedOrder.body.finalPrice).toBe(invoice.body.amount);
+
+    // The components still sum to the total, with the transport line included.
+    const b = routedOrder.body.priceBreakdown;
+    expect(Math.round((b.fuelLineTotal + b.deliveryFee + b.serviceFee + b.tax) * 100)).toBe(
+      Math.round(b.total * 100),
+    );
   });
 });

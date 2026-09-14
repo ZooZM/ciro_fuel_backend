@@ -9,6 +9,8 @@ import { SettlementMethod } from '../../common/enums/settlement-method.enum';
 import { ErrorCode } from '../../common/enums/error-code.enum';
 import { CursorSortField } from '../../common/pagination/cursor.util';
 import { paginate, PaginatedResponse } from '../../common/pagination/paginate.util';
+import { isDuplicateKeyError } from '../../common/utils/mongo-error.util';
+import { AccountMovementDirection, directionForKind } from '../../common/enums/account-movement-direction.enum';
 
 // data-model.md's `(companyId, createdAt, _id)` index — `companyId` itself is applied by
 // the tenant-scope plugin's ambient filter, never listed here (same convention as
@@ -119,6 +121,112 @@ export class PlatformAccountService {
   }
 
   /**
+   * spec 017 (operator dashboard) T139/FR-065/FR-067 — what the platform
+   * currently owes this fuel company in cashback.
+   *
+   * **A new TWO-KIND derivation, beside `getConfirmedBalance` rather than
+   * instead of it.** This is research R11's trap, and it is worth stating
+   * plainly: `getConfirmedBalance` is per-kind. A payout recorded under
+   * `CASHBACK_PAID_OUT` leaves `getConfirmedBalance(CASHBACK_CREDITED)`
+   * completely unchanged — and still returns a correct-looking number, because
+   * it is a correct answer to a different question. An implementation that
+   * reused it would satisfy every over-balance, duplicate-reference and
+   * authorization test in this feature while the owed balance simply never
+   * fell (FR-067 violated, silently). T130 is the guard that catches it.
+   *
+   * `getConfirmedBalance` is deliberately left untouched: it is load-bearing
+   * for the commission and payment balances, where per-kind is the right shape.
+   */
+  async getCashbackOwed(
+    companyId: string | Types.ObjectId,
+    session?: ClientSession,
+  ): Promise<number> {
+    const [credited, paidOut] = await Promise.all([
+      this.getConfirmedBalance(companyId, AccountMovementKind.CASHBACK_CREDITED, session),
+      this.getConfirmedBalance(companyId, AccountMovementKind.CASHBACK_PAID_OUT, session),
+    ]);
+    return credited - paidOut;
+  }
+
+  /**
+   * spec 017 T140/T141/FR-066–FR-070 — the operator records that the platform
+   * paid a fuel company its accrued cashback.
+   *
+   * **One transaction that re-reads the owed balance INSIDE the session**
+   * (FR-069, Constitution V). The figure the operator's screen was showing has
+   * no authority: an accrual can land between the screen rendering and the form
+   * submitting, and comparing against the stale number would let through a
+   * payout the balance no longer covers.
+   *
+   * Created already **`CONFIRMED`**, unlike `recordPayment` above, and the
+   * asymmetry is deliberate. A company's payment is `RECORDED` until the
+   * operator confirms it, because the operator is a genuine second party
+   * verifying the company's claim. Here the operator IS the party asserting the
+   * money moved — there is nobody left to confirm it, and leaving it `RECORDED`
+   * would mean the payout did not reduce the balance, so a second payout for
+   * the same amount would be permitted immediately (FR-067 violated).
+   *
+   * FR-070's duplicate-reference refusal is carried by the partial unique index
+   * on `(companyId, kind, reference)`, caught below — never by a prior read,
+   * which two concurrent submissions can both pass.
+   */
+  async recordCashbackPayout(
+    companyId: string | Types.ObjectId,
+    input: {
+      amount: number;
+      method: SettlementMethod;
+      reference: string;
+      documentFileId?: string;
+    },
+    currency: string,
+    confirmedBy: string,
+  ): Promise<AccountMovementDocument> {
+    const session = await this.accountMovementModel.db.startSession();
+    let movement!: AccountMovementDocument;
+    try {
+      await session.withTransaction(async () => {
+        // Re-read INSIDE the session — the whole point of FR-069.
+        const owed = await this.getCashbackOwed(companyId, session);
+        if (input.amount > owed) {
+          // THROWN, never returned. An early `return` inside
+          // `session.withTransaction` COMMITS rather than aborts — the exact
+          // defect spec 008's assignment booking shipped and had to fix.
+          throw new ConflictException({
+            error: ErrorCode.CASHBACK_PAYOUT_EXCEEDS_BALANCE,
+            message: `Payout of ${input.amount} exceeds the ${owed} currently owed`,
+          });
+        }
+        movement = await this.createMovement(
+          {
+            companyId,
+            kind: AccountMovementKind.CASHBACK_PAID_OUT,
+            amount: input.amount,
+            currency,
+            state: AccountMovementState.CONFIRMED,
+            method: input.method,
+            reference: input.reference,
+            documentFileId: input.documentFileId,
+            confirmedBy,
+            confirmedAt: new Date(),
+          },
+          session,
+        );
+      });
+    } catch (error) {
+      if (isDuplicateKeyError(error)) {
+        throw new ConflictException({
+          error: ErrorCode.CASHBACK_PAYOUT_DUPLICATE_REFERENCE,
+          message: 'A payout with this reference is already recorded for this company',
+        });
+      }
+      throw error;
+    } finally {
+      await session.endSession();
+    }
+    return movement;
+  }
+
+  /**
    * T163/T164/FR-069/FR-067a — conditional update filtered on `state: RECORDED`, same
    * idiom as `CreditLimitRequestsService.resolve`: `modifiedCount` (via `findOneAndUpdate`'s
    * null return), never a prior read, decides which of two concurrent confirmations wins.
@@ -150,14 +258,41 @@ export class PlatformAccountService {
   // FUEL_COMPANY_ADMIN caller regardless of what is passed, so it is only ever
   // load-bearing for SUPER_ADMIN, who bypasses the plugin and otherwise sees every
   // company's movements mixed together with no way to narrow to one.
-  listMovements(
+  async listMovements(
     filter: { kind?: AccountMovementKind; state?: AccountMovementState; cursor?: string; companyId?: string } = {},
-  ): Promise<PaginatedResponse<AccountMovementDocument>> {
+  ): Promise<PaginatedResponse<Record<string, unknown>>> {
     const query: Record<string, unknown> = {};
     if (filter.kind !== undefined) query.kind = filter.kind;
     if (filter.state !== undefined) query.state = filter.state;
     if (filter.companyId !== undefined) query.companyId = filter.companyId;
-    return paginate(this.accountMovementModel, query, MOVEMENT_SORT_KEYS, filter.cursor);
+    const page = await paginate(
+      this.accountMovementModel,
+      query,
+      MOVEMENT_SORT_KEYS,
+      filter.cursor,
+    );
+    // spec 017 T144/FR-064 — `direction` is ADDED, nothing is reshaped. Every
+    // field feature 013's dashboard already reads is present and unchanged, so
+    // its ledger keeps working untouched; this is the field that stops a
+    // cashback the platform paid OUT from being indistinguishable from a
+    // payment the company paid IN (FR-071).
+    return { items: page.items.map((m) => this.toMovementView(m)), nextCursor: page.nextCursor };
+  }
+
+  /**
+   * spec 017 T144/FR-064 — one movement with its `direction` derived from its
+   * `kind` at serialisation.
+   *
+   * **Derived, never stored** (research R11). Adding the field to the schema
+   * would duplicate a fact the `kind` already determines, could disagree with it
+   * after a bad write, and would need every existing row migrated to introduce
+   * — and this feature adds no migration because it rewrites nothing.
+   */
+  toMovementView(movement: AccountMovementDocument): Record<string, unknown> {
+    return {
+      ...movement.toObject(),
+      direction: directionForKind(movement.kind),
+    };
   }
 
   /**

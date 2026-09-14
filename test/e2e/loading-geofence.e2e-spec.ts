@@ -7,8 +7,7 @@ import {
   DEFAULT_WAREHOUSE_LOCATION,
   resetFixtureDispatchState,
   seedTwoCompanies,
-  TwoCompanyFixture,
-} from '../utils/fixtures';
+  TwoCompanyFixture, settleClientReview } from '../utils/fixtures';
 import { OrderStatus } from '../../src/common/enums/order-status.enum';
 import { ErrorCode } from '../../src/common/enums/error-code.enum';
 import { VerificationStage } from '../../src/common/enums/verification-stage.enum';
@@ -107,6 +106,7 @@ describe('Loading verification geofence (spec 008 US4)', () => {
       .send(rawBody)
       .expect(201);
 
+    await settleClientReview(app, orderId);
     await request(server)
       .post(`/api/v1/dispatch/orders/${orderId}/assign`)
       .set('Authorization', `Bearer ${transportAdmin.token}`)

@@ -147,6 +147,24 @@ export class InvoicesService {
           method,
           state: InvoiceState.ISSUED,
           payerRole,
+          // The PAYER of a DEFERRED invoice, stamped at issuance.
+          //
+          // It used to be back-patched by `setTransportCompanyId` immediately
+          // after routing, because issuance preceded routing and the payer was
+          // not yet known. Issuance now FOLLOWS routing — the transport company
+          // is what makes the total knowable — so the payer is known here, and
+          // one write inside this transaction replaces a second write outside
+          // it that could fail on its own and leave a DEFERRED invoice nobody
+          // could see or settle.
+          //
+          // DEFERRED only, deliberately: `transportCompanyId` is what the
+          // multi-party scope reads to decide whether a transporter may see an
+          // invoice at all. Stamping it on a CREDIT or DIRECT invoice — both of
+          // which are now equally routed — would disclose to the transporter a
+          // bill that is none of their business (FR-002).
+          ...(method === PaymentMethod.DEFERRED && order.transportCompanyId
+            ? { transportCompanyId: order.transportCompanyId }
+            : {}),
         },
       ],
       { session },

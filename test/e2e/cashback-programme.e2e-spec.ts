@@ -77,14 +77,21 @@ describe('Cashback accrues only while active and only for a targeted company (FR
       .send({ basis: 'PERCENTAGE', rate: 5, isActive: true, targetsAllCompanies: true, targetCompanyIds: [] })
       .expect(200);
 
-    // DIESEL @ 2.5/L * 100L = 250.00 -> 5% = 12.50
-    await createApproveAndSettleDeferredOrder(fixtures.companyA);
+    // Cashback is a percentage of the settled INVOICE, so the expectation is
+    // derived from the order's own `finalPrice` rather than restating the
+    // arithmetic — that total is fuel + service fee + haul + VAT, and a literal
+    // restating it drifts silently the moment any component moves.
+    const order = await createApproveAndSettleDeferredOrder(fixtures.companyA);
+    const expectedCashback = Math.round(order.finalPrice * 5) / 100;
 
     const whileOn = await request(server)
       .get('/api/v1/billing/balances/me')
       .set('Authorization', `Bearer ${admin.token}`)
       .expect(200);
-    expect(whileOn.body.cashbackAccrued).toBeCloseTo(before.body.cashbackAccrued + 12.5, 2);
+    expect(whileOn.body.cashbackAccrued).toBeCloseTo(
+      before.body.cashbackAccrued + expectedCashback,
+      2,
+    );
   });
 
   it('accrues to a named company but not to one left off the target list, with the same programme active', async () => {
@@ -111,8 +118,10 @@ describe('Cashback accrues only while active and only for a targeted company (FR
       .set('Authorization', `Bearer ${fixtures.companyB.admin.token}`)
       .expect(200);
 
-    await createApproveAndSettleDeferredOrder(fixtures.companyA);
+    const orderA = await createApproveAndSettleDeferredOrder(fixtures.companyA);
     await createApproveAndSettleDeferredOrder(fixtures.companyB);
+    // Again derived from the invoice this order actually produced.
+    const expectedA = Math.round(orderA.finalPrice * 5) / 100;
 
     const afterA = await request(server)
       .get('/api/v1/billing/balances/me')
@@ -123,7 +132,7 @@ describe('Cashback accrues only while active and only for a targeted company (FR
       .set('Authorization', `Bearer ${fixtures.companyB.admin.token}`)
       .expect(200);
 
-    expect(afterA.body.cashbackAccrued).toBeCloseTo(beforeA.body.cashbackAccrued + 12.5, 2);
+    expect(afterA.body.cashbackAccrued).toBeCloseTo(beforeA.body.cashbackAccrued + expectedA, 2);
     expect(afterB.body.cashbackAccrued).toBe(beforeB.body.cashbackAccrued);
   });
 });

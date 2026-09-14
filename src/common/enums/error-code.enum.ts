@@ -245,4 +245,31 @@ export enum ErrorCode {
   // is code-addressable, and a lone untranslatable message is the one a dashboard
   // has no choice but to show in English or bury under a generic error.
   EXCHANGE_DELIVERY_IN_PAST = 'EXCHANGE_DELIVERY_IN_PAST',
+
+  // spec 017 (operator dashboard)
+  // 409. The payout amount exceeds what the platform currently owes this fuel
+  // company (FR-068). The comparison is made against the owed balance re-read
+  // INSIDE the recording transaction (FR-069), never against the figure the
+  // operator's screen was showing — an accrual can land between the two.
+  CASHBACK_PAYOUT_EXCEEDS_BALANCE = 'CASHBACK_PAYOUT_EXCEEDS_BALANCE',
+  // 409. A payout with this reference is already recorded for this company
+  // (FR-070). Translated from the partial unique `(companyId, kind,
+  // reference)` index violation, never from a prior existence check two
+  // concurrent submissions could both pass identically.
+  CASHBACK_PAYOUT_DUPLICATE_REFERENCE = 'CASHBACK_PAYOUT_DUPLICATE_REFERENCE',
+  // 400. `status` and `bucket` were both supplied and the status is not a
+  // member of that bucket. A contradictory pair must refuse: returning a
+  // silently empty page would read as "there are no such orders" when the
+  // truth is "that combination cannot exist".
+  ORDER_BUCKET_STATUS_CONFLICT = 'ORDER_BUCKET_STATUS_CONFLICT',
+  // 400. `parentFuelCompanyId` is absent, malformed, names no company, or
+  // names a company that is not of type FUEL (FR-030). A merely-present id
+  // satisfies the requirement's letter and none of its purpose — a transport
+  // company parented to another transport company is unroutable.
+  INVALID_PARENT_FUEL_COMPANY = 'INVALID_PARENT_FUEL_COMPANY',
+
+  // 409. The station owner tried to accept a total on an order that is not
+  // waiting for it — either it is not at PENDING_PAYMENT at all, or it is a
+  // DIRECT order, which is confirmed by paying rather than by accepting.
+  ORDER_NOT_AWAITING_CONFIRMATION = 'ORDER_NOT_AWAITING_CONFIRMATION',
 }

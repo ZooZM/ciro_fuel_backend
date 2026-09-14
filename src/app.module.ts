@@ -24,6 +24,8 @@ import { RegionsModule } from './modules/regions/regions.module';
 import { GeocodingModule } from './modules/geocoding/geocoding.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
 import { OrdersModule } from './modules/orders/orders.module';
+import { PlatformModule } from './modules/platform/platform.module';
+import { AnnouncementsModule } from './modules/announcements/announcements.module';
 import { DispatchModule } from './modules/dispatch/dispatch.module';
 import { PaymentsModule } from './modules/payments/payments.module';
 import { InvoicesModule } from './modules/invoices/invoices.module';
@@ -181,6 +183,10 @@ import { buildPinoOptions } from './common/logging/pino.config';
     StopDetectionModule,
     SupportModule,
     DriversModule,
+    // spec 017 (operator dashboard) T030 — the platform operator's own
+    // cross-company figures. SUPER_ADMIN-only; no tenant-scoped equivalent.
+    PlatformModule,
+    AnnouncementsModule,
     HealthModule,
   ],
 })

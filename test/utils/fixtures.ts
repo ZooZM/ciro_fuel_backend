@@ -329,6 +329,42 @@ export async function resetFixtureDispatchState(
 }
 
 /**
+ * Settles the station owner's review of the final total, if the order is
+ * waiting on it — the fixture stand-in for "the customer looked at the real
+ * price and went ahead".
+ *
+ * Routing now prices the haul and hands the order back to the station owner
+ * before any driver can be assigned, so an order that used to sit at
+ * ROUTED_TO_TRANSPORT straight after approval now sits at PENDING_PAYMENT.
+ * Every test that approves an order and then assigns a driver needs this step
+ * in between; without it the assignment is refused with a 409, which is the
+ * platform behaving correctly.
+ *
+ * Driven through `OrdersService` rather than over HTTP deliberately: the real
+ * confirmation is a gateway webhook for DIRECT and `POST /orders/:id/accept`
+ * for DEFERRED/CREDIT, and a fixture that had to branch on payment method (and
+ * hold a client token, and sign a webhook body) would be re-testing the
+ * settlement path in every suite that merely needs to get past it. The suites
+ * that are ABOUT settlement — `order-lifecycle`, `billing-methods` — exercise
+ * the real routes instead.
+ *
+ * A no-op unless the order is actually awaiting the client, so it is safe to
+ * call unconditionally.
+ */
+export async function settleClientReview(
+  app: INestApplication,
+  orderId: string,
+): Promise<void> {
+  const { OrdersService } = await import('../../src/modules/orders/orders.service');
+  const { OrderStatus } = await import('../../src/common/enums/order-status.enum');
+  const { SYSTEM_ACTOR } = await import('../../src/common/constants/system-actor');
+  const ordersService = app.get(OrdersService);
+  const order = await ordersService.findById(orderId);
+  if (order.status !== OrderStatus.PENDING_PAYMENT) return;
+  await ordersService.settleAndResume(order, SYSTEM_ACTOR);
+}
+
+/**
  * spec 008: assignment alone no longer reaches IN_TRANSIT — it stops at
  * ASSIGNED_TO_DRIVER pending departure verification, then LOADING pending
  * loading confirmation (FR-046a). Every pre-existing e2e test that used to
@@ -358,6 +394,9 @@ export async function assignAndDepart(
   // fresh per-file app/storage instance — see driver-handover.e2e-spec.ts's
   // own "shared budget" comment for why this collision is real.
   await app.get(ResilientThrottlerStorage).reset();
+  // The order may be waiting on the station owner's review of the real total
+  // (routing prices the haul, then hands it back) — a no-op if it is not.
+  await settleClientReview(app, orderId);
   await request(server)
     .post(`/api/v1/dispatch/orders/${orderId}/assign`)
     .set('Authorization', `Bearer ${transportAdminToken}`)
@@ -520,4 +559,163 @@ export async function seedThreeFuelCompanies(app: INestApplication): Promise<Thr
     companyB,
     companyC,
   };
+}
+
+// ---------------------------------------------------------------------------
+// spec 017 (operator dashboard)
+// ---------------------------------------------------------------------------
+
+export interface ActorFixture {
+  id: string;
+  email: string;
+  token: string;
+  phone: string;
+}
+
+/**
+ * A `SUPER_ADMIN` with a live token, on its own, with no company around it.
+ *
+ * Every operator-only refusal test (SC-012) needs one actor of each role and
+ * nothing else; re-seeding a whole two-company platform per suite to obtain a
+ * single token is what makes those suites slow enough to be skipped. The email
+ * is caller-supplied because a suite that seeds more than one platform-level
+ * actor would otherwise collide on the unique email index.
+ */
+export async function superAdminActor(
+  app: INestApplication,
+  email = 'operator@platform.test',
+): Promise<ActorFixture> {
+  const usersService = app.get(UsersService);
+  const authService = app.get(AuthService);
+
+  const phone = uniquePhone();
+  const user = await usersService.create({
+    role: UserRole.SUPER_ADMIN,
+    email,
+    password: DEFAULT_PASSWORD,
+    fullName: 'Platform Operator',
+    phone,
+    isActive: true,
+  });
+  const auth = await authService.login({ email, password: DEFAULT_PASSWORD });
+
+  return { id: String(user._id), email, token: auth.accessToken, phone };
+}
+
+export interface CompanyWithAdminFixture {
+  companyId: string;
+  name: string;
+  admin: ActorFixture;
+}
+
+export interface MultiCompanyPlatformFixture {
+  superAdmin: ActorFixture;
+  /** Fuel companies, in creation order. */
+  fuelCompanies: CompanyWithAdminFixture[];
+  /** Transport companies, in creation order, each parented to `fuelCompanies[0]`. */
+  transportCompanies: CompanyWithAdminFixture[];
+}
+
+/**
+ * A platform of N fuel and M transport companies, each with its own
+ * administrator — the fixture behind the company-type filter (US2), the
+ * platform overview's company counts (US1) and the announcement fan-out's
+ * recipient set (US6).
+ *
+ * Deliberately lighter than {@link createCompanyFixture}: no client, driver,
+ * truck, tank or station. Nothing that counts companies reads any of that, and
+ * building eight full company fixtures would dominate the suite's runtime for
+ * no coverage gained. A test that needs a whole delivery chain uses
+ * {@link seedTwoCompanies} instead.
+ *
+ * Every transport company is created through
+ * `CompaniesService.createTransportCompany` under the FIRST fuel company —
+ * i.e. through the platform's PRE-EXISTING path, not this feature's new
+ * operator route. That is what makes it usable as the "before" half of the
+ * FR-031 / SC-005 equivalence tests: a transporter seeded here must stay
+ * indistinguishable from one the operator onboards.
+ */
+export async function seedMultiCompanyPlatform(
+  app: INestApplication,
+  options: { fuelCompanies?: number; transportCompanies?: number } = {},
+): Promise<MultiCompanyPlatformFixture> {
+  const fuelCount = options.fuelCompanies ?? 3;
+  const transportCount = options.transportCompanies ?? 5;
+
+  const companiesService = app.get(CompaniesService);
+  const usersService = app.get(UsersService);
+  const authService = app.get(AuthService);
+
+  const superAdmin = await superAdminActor(app, 'operator-platform@platform.test');
+
+  const makeAdmin = async (
+    companyId: string,
+    role: UserRole,
+    slug: string,
+    label: string,
+  ): Promise<ActorFixture> => {
+    const phone = uniquePhone();
+    const email = `admin-${slug}@platform.test`;
+    const user = await usersService.create({
+      companyId: companyId as never,
+      role,
+      email,
+      password: DEFAULT_PASSWORD,
+      fullName: label,
+      phone,
+      isActive: true,
+    });
+    const auth = await authService.login({ email, password: DEFAULT_PASSWORD });
+    return { id: String(user._id), email, token: auth.accessToken, phone };
+  };
+
+  const fuelCompanies: CompanyWithAdminFixture[] = [];
+  for (let i = 0; i < fuelCount; i += 1) {
+    const name = `PlatformFuel${i + 1}`;
+    const company = await companiesService.create({
+      name,
+      type: CompanyType.FUEL,
+      status: CompanyStatus.ACTIVE,
+      contactEmail: `contact-${name.toLowerCase()}@platform.test`,
+      contactPhone: '+966500000000',
+      fuelPrices: [{ fuelType: FuelType.DIESEL, basePricePerLiter: 2.5 }],
+    });
+    const companyId = String(company._id);
+    fuelCompanies.push({
+      companyId,
+      name,
+      admin: await makeAdmin(
+        companyId,
+        UserRole.FUEL_COMPANY_ADMIN,
+        name.toLowerCase(),
+        `${name} Admin`,
+      ),
+    });
+  }
+
+  const parentFuelCompanyId = fuelCompanies[0].companyId;
+  const transportCompanies: CompanyWithAdminFixture[] = [];
+  for (let i = 0; i < transportCount; i += 1) {
+    const name = `PlatformTransport${i + 1}`;
+    const company = await companiesService.createTransportCompany(parentFuelCompanyId, {
+      name,
+      contactEmail: `contact-${name.toLowerCase()}@platform.test`,
+      contactPhone: '+966500000002',
+      status: CompanyStatus.ACTIVE,
+    });
+    const companyId = String(company._id);
+    await companiesService.assignRegions(parentFuelCompanyId, companyId, [RegionCode.RIYADH]);
+    transportCompanies.push({
+      companyId,
+      name,
+      admin: await makeAdmin(
+        companyId,
+        UserRole.TRANSPORT_COMPANY_ADMIN,
+        name.toLowerCase(),
+        `${name} Admin`,
+      ),
+    });
+  }
+
+  return { superAdmin, fuelCompanies, transportCompanies };
 }

@@ -8,8 +8,7 @@ import {
   seedTwoCompanies,
   TwoCompanyFixture,
   assignAndDepart,
-  resetFixtureDispatchState,
-} from '../utils/fixtures';
+  resetFixtureDispatchState, settleClientReview } from '../utils/fixtures';
 import { User, UserDocument } from '../../src/modules/users/schemas/user.schema';
 import { Truck, TruckDocument } from '../../src/modules/trucks/schemas/truck.schema';
 import { Tank, TankDocument } from '../../src/modules/tanks/schemas/tank.schema';
@@ -260,6 +259,7 @@ describe('Proof of delivery — OTP security & force-complete (US1)', () => {
       .send(rawBody)
       .expect(201);
 
+    await settleClientReview(app, orderId);
     await request(server)
       .post(`/api/v1/dispatch/orders/${orderId}/assign`)
       .set('Authorization', `Bearer ${transportAdmin.token}`)

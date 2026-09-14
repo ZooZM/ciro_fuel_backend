@@ -2,9 +2,10 @@ import request from 'supertest';
 import { createHmac } from 'node:crypto';
 import { INestApplication } from '@nestjs/common';
 import { createTestApp, TestAppContext } from '../utils/test-app.factory';
-import { DEFAULT_WAREHOUSE_LOCATION, seedTwoCompanies, TwoCompanyFixture } from '../utils/fixtures';
+import { DEFAULT_WAREHOUSE_LOCATION, seedTwoCompanies, TwoCompanyFixture, settleClientReview } from '../utils/fixtures';
 import { UsersService } from '../../src/modules/users/users.service';
 import { OrderStatus } from '../../src/common/enums/order-status.enum';
+import { ErrorCode } from '../../src/common/enums/error-code.enum';
 
 jest.setTimeout(120_000);
 
@@ -41,27 +42,68 @@ describe('Order lifecycle (US1) — happy path', () => {
       .expect(201);
 
     expect(createRes.body.status).toBe(OrderStatus.PENDING_APPROVAL);
-    expect(createRes.body.estimatedPrice).toBeCloseTo(2.5 * 500, 2);
+    // An order placed WITHOUT a quote token is priced exactly as one placed
+    // with it: the fuel line, then the fixture company's 1% service fee, then
+    // 15% VAT on the two. It used to be the bare fuel line alone — no service
+    // fee and no VAT — so the same order was invoiced ~16% under a quoted one,
+    // and `estimatedPrice` carried that lower figure into approval, invoicing
+    // and the credit check alike. The delivery fee is still absent until a
+    // transporter is chosen, which `RoutingService` does later.
+    const fuelLine = 2.5 * 500;
+    const serviceFee = fuelLine * 0.01;
+    // Rounded to currency precision the same way the platform rounds it —
+    // 1451.875 lands exactly on the half, so an unrounded expectation misses
+    // by precisely the tolerance.
+    const expectedTotal = Math.round((fuelLine + serviceFee) * 1.15 * 100) / 100;
+    expect(createRes.body.estimatedPrice).toBeCloseTo(expectedTotal, 2);
+    expect(createRes.body.priceBreakdown).toMatchObject({
+      fuelLineTotal: fuelLine,
+      serviceFee,
+      taxRatePercent: 15,
+    });
     const orderId = createRes.body._id;
 
-    // 2. Admin approves — issues the (default DIRECT) invoice and reaches
-    // PENDING_PAYMENT immediately; routing is deferred until settlement
-    // (spec 004 FR-020/FR-020a).
+    // 2. Admin approves. Approval now ROUTES the order — for every payment
+    // method, DIRECT included — because routing is what makes the order
+    // priceable: the delivery leg is priced by the transport company that
+    // performs it, and until one is chosen there is no total to charge.
+    //
+    // This REVERSES the old FR-020a ordering, under which a DIRECT order was
+    // made to pay first and routed only once settlement arrived. It could not
+    // survive the station owner being shown the real transport price before
+    // paying, because that price does not exist until routing has run.
     const approveRes = await request(server)
       .patch(`/api/v1/orders/${orderId}/approve`)
       .set('Authorization', `Bearer ${admin.token}`)
       .send({})
       .expect(200);
 
+    // Same status as before, reached the other way round: routed first, THEN
+    // handed back to the station owner to settle.
     expect(approveRes.body.status).toBe(OrderStatus.PENDING_PAYMENT);
-    expect(approveRes.body.finalPrice).toBeCloseTo(2.5 * 500, 2);
     expect(approveRes.body.invoiceId).toBeTruthy();
-    expect(approveRes.body.transportCompanyId).toBeFalsy();
+    // Routed already — this is the assertion that inverted.
+    expect(approveRes.body.transportCompanyId).toBe(fixtures.companyA.transportCompanyId);
+    // And the total the client is asked for now INCLUDES the haul, which the
+    // fuel line alone never did. This order was created WITHOUT a quote token,
+    // which used to mean it carried no itemised breakdown at all and was
+    // charged fuel-plus-haul with neither the service fee nor VAT. Both paths
+    // now price identically, so the breakdown is present here and the haul is
+    // re-derived into it rather than bolted onto `finalPrice`.
+    expect(approveRes.body.priceBreakdown).toMatchObject({
+      fuelLineTotal: 2.5 * 500,
+      deliveryFee: 30,
+      serviceFeePercent: 1,
+      taxRatePercent: 15,
+    });
+    expect(approveRes.body.finalPrice).toBeCloseTo(approveRes.body.priceBreakdown.total, 2);
+    // Still strictly more than the bare fuel line — the haul is charged either
+    // way, which is what this assertion has always been about.
+    expect(approveRes.body.finalPrice).toBeGreaterThan(2.5 * 500);
 
-    // 3. Simulate a confirmed Sadad payment webhook — settlement unblocks
-    // routing (FR-020a), auto-routing to the sole Transportation Company
-    // serving the client's region (FR-014), same as approval itself does
-    // for DEFERRED/CREDIT orders.
+    // 3. Simulate a confirmed Sadad payment webhook. Settlement no longer
+    // triggers routing — that already happened — it releases the order back to
+    // the transporter it was routed to, so a driver can be assigned.
     const { rawBody, signature } = signedWebhookBody(
       {
         transactionId: `SDD-${orderId}`,
@@ -92,12 +134,14 @@ describe('Order lifecycle (US1) — happy path', () => {
     // FR-009) — landing on ASSIGNED_TO_DRIVER, not IN_TRANSIT: spec 008
     // FR-046a removed assignment's old auto-advance, gating it behind
     // departure verification and loading confirmation instead.
+    await settleClientReview(app, orderId);
     const candidatesRes = await request(server)
       .get(`/api/v1/dispatch/orders/${orderId}/candidates`)
       .set('Authorization', `Bearer ${fixtures.companyA.transportAdmin.token}`)
       .expect(200);
     expect(candidatesRes.body.map((c: { _id: string }) => c._id)).toEqual([driver.id]);
 
+    await settleClientReview(app, orderId);
     const assignRes = await request(server)
       .post(`/api/v1/dispatch/orders/${orderId}/assign`)
       .set('Authorization', `Bearer ${fixtures.companyA.transportAdmin.token}`)
@@ -231,11 +275,16 @@ describe('Order lifecycle (US1) — happy path', () => {
       h.from,
       h.to,
     ]);
+    // The two middle pairs are the amended flow, and they are the mirror image
+    // of what they used to be. It was: pay first, then route
+    // (APPROVED -> PENDING_PAYMENT -> APPROVED -> ROUTED_TO_TRANSPORT).
+    // It is now: route first — which is what produces a total that includes the
+    // haul — then hand it back to the station owner to settle, then resume.
     expect(transitions).toEqual([
       [OrderStatus.PENDING_APPROVAL, OrderStatus.APPROVED],
-      [OrderStatus.APPROVED, OrderStatus.PENDING_PAYMENT],
-      [OrderStatus.PENDING_PAYMENT, OrderStatus.APPROVED], // settlement
-      [OrderStatus.APPROVED, OrderStatus.ROUTED_TO_TRANSPORT],
+      [OrderStatus.APPROVED, OrderStatus.ROUTED_TO_TRANSPORT], // transporter chosen; haul priced
+      [OrderStatus.ROUTED_TO_TRANSPORT, OrderStatus.PENDING_PAYMENT], // real total to the client
+      [OrderStatus.PENDING_PAYMENT, OrderStatus.ROUTED_TO_TRANSPORT], // settled
       [OrderStatus.ROUTED_TO_TRANSPORT, OrderStatus.ASSIGNED_TO_DRIVER],
       [OrderStatus.ASSIGNED_TO_DRIVER, OrderStatus.LOADING], // departure verification
       [OrderStatus.LOADING, OrderStatus.IN_TRANSIT], // loading confirmed
@@ -303,11 +352,16 @@ describe('Order lifecycle (US1) — happy path', () => {
 
   it('rejects order creation for an unpriced fuel type', async () => {
     const { client } = fixtures.companyA;
-    await request(app.getHttpServer())
+    // 409 PRICING_NOT_CONFIGURED, the same typed refusal `POST /orders/quote`
+    // already gives for the same gap — both paths now read the same rates, so
+    // both report a missing one the same way. It was a bare 400 with a prose
+    // message, which neither client could branch on.
+    const res = await request(app.getHttpServer())
       .post('/api/v1/orders')
       .set('Authorization', `Bearer ${client.token}`)
       .send({ fuelType: 'KEROSENE', quantityLiters: 100 })
-      .expect(400);
+      .expect(409);
+    expect(res.body.error).toBe(ErrorCode.PRICING_NOT_CONFIGURED);
   });
 
   // Feature 009 T108/SC-009: the summary endpoint's counts must never leak

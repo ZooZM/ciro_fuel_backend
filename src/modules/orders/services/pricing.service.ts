@@ -6,6 +6,7 @@ import { FuelType } from '../../../common/enums/fuel-type.enum';
 import { ErrorCode } from '../../../common/enums/error-code.enum';
 import { DEFAULT_CURRENCY, roundCurrency } from '../../../common/constants/money.constants';
 import { PriceBreakdown } from '../schemas/order.schema';
+import { derivePriceBreakdown } from '../../../common/pricing/derive-price-breakdown';
 
 export interface Quote {
   breakdown: PriceBreakdown;
@@ -19,7 +20,9 @@ interface QuotePayload {
   fuelType: FuelType;
   quantityLiters: number;
   unitPrice: number;
-  deliveryFee: number;
+  // No `deliveryFee`: a quote commits to the FUEL company's rates alone. The
+  // transport price is set by whichever transporter routing later picks, so a
+  // quote could neither name it nor be made stale by it changing.
   serviceFeePercent: number;
   taxRatePercent: number;
   expiresAt: string;
@@ -48,47 +51,23 @@ export class PricingService {
   ) {}
 
   /**
-   * Derivation order fixed by FR-011g: fuel line total, then delivery fee,
-   * then service fee (percentage of the fuel line), then tax (percentage
-   * of the sum of the preceding three). Each component is rounded before
-   * the next is derived from it — not just at the end — so a compounding
-   * component (service fee, tax) is built from an already-rounded figure,
-   * the same way a human accountant would compute it line by line.
+   * Delegates to the shared pure derivation — `RoutingService` re-derives the
+   * same order once the transport company is known, and the two must not drift.
    */
   private derive(
     unitPrice: number,
     quantityLiters: number,
-    deliveryFee: number,
+    deliveryFee: number | undefined,
     serviceFeePercent: number,
     taxRatePercent: number,
   ): Omit<PriceBreakdown, 'currency' | 'pricedAt'> {
-    const fuelLineTotal = roundCurrency(unitPrice * quantityLiters);
-    const roundedDeliveryFee = roundCurrency(deliveryFee);
-    const serviceFee = roundCurrency((fuelLineTotal * serviceFeePercent) / 100);
-    const tax = roundCurrency(
-      ((fuelLineTotal + roundedDeliveryFee + serviceFee) * taxRatePercent) / 100,
-    );
-    // The sum of the four ALREADY-ROUNDED components — never a separately
-    // rounded sum of the raw figures (FR-011b/research R2).
-    //
-    // The outer `roundCurrency` is not a second rounding of the arithmetic:
-    // every operand is already at 2dp, so it cannot change the value. It
-    // only normalises IEEE-754 addition noise — 10900 + 50 + 272.5 +
-    // 1683.38 evaluates to 12905.880000000001 in binary floating point,
-    // which is what the client would otherwise be shown and what the
-    // invoice would be asserted against.
-    const total = roundCurrency(fuelLineTotal + roundedDeliveryFee + serviceFee + tax);
-
-    return {
-      fuelLineTotal,
-      deliveryFee: roundedDeliveryFee,
-      serviceFee,
-      tax,
-      total,
+    return derivePriceBreakdown(
       unitPrice,
+      quantityLiters,
+      deliveryFee,
       serviceFeePercent,
       taxRatePercent,
-    };
+    );
   }
 
   /**
@@ -101,10 +80,8 @@ export class PricingService {
   private async currentRates(
     fuelCompanyId: string,
     fuelType: FuelType,
-    target: DeliveryTarget,
   ): Promise<{
     unitPrice: number;
-    deliveryFee: number;
     serviceFeePercent: number;
     taxRatePercent: number;
   }> {
@@ -120,20 +97,86 @@ export class PricingService {
       });
     }
 
-    // The delivery leg is priced by the company that performs it. `null` means no
-    // transporter of this fuel company serves the region at all (FR-016) — the
-    // pre-existing "held at AWAITING_ROUTING and routed by hand" case, where the fuel
-    // company's own configured fee remains the only figure anyone has. Every other
-    // outcome either resolves to a transporter's own rate or refuses outright; nothing
-    // here averages, guesses, or silently prefers one transporter over another.
-    const transport = await this.transportPricing.resolve(fuelCompanyId, target, fuelType);
-
+    // NO transport price is resolved here any more.
+    //
+    // The delivery leg is priced by the company that performs it, and which
+    // company that is only becomes known at routing — after the fuel company
+    // has approved the order. Quoting it earlier meant answering a question
+    // nobody could answer yet, and the old answer was built out of whichever
+    // transporters happened to serve the region: it refused the quote outright
+    // when any one of them had not set a rate (`TRANSPORT_PRICE_NOT_SET`), and
+    // fell back to the FUEL company's own configured fee when none of them
+    // served it at all — a figure for a haul that company does not perform.
+    //
+    // The station owner is now quoted the fuel line alone and is shown the real
+    // transport price once a transporter is assigned, which is the first moment
+    // one exists (`RoutingService.routeOrder` -> `priceWithTransport`).
     return {
       unitPrice,
-      deliveryFee: transport ? transport.fee : pricingConfig.deliveryFee,
       serviceFeePercent: pricingConfig.serviceFeePercent,
       taxRatePercent: pricingConfig.taxRatePercent,
     };
+  }
+
+  /**
+   * Re-derives the breakdown once the transport company is known, from the
+   * SAME rates the order was quoted against plus that company's own delivery
+   * fee. Called by `RoutingService` at the moment routing resolves.
+   *
+   * The fuel-side rates are re-read live rather than taken from the stored
+   * breakdown: between quotation and routing sits a fuel company's approval,
+   * and the platform's own rule is that the rates in force are what applies.
+   * `unitPrice` is pinned to the one the order was quoted and approved at, so
+   * the only figure this step can introduce is the transport fee itself.
+   */
+  async priceWithTransport(
+    quoted: PriceBreakdown,
+    quantityLiters: number,
+    deliveryFee: number,
+  ): Promise<PriceBreakdown> {
+    const breakdown = this.derive(
+      quoted.unitPrice,
+      quantityLiters,
+      deliveryFee,
+      quoted.serviceFeePercent,
+      quoted.taxRatePercent,
+    );
+    return { ...breakdown, currency: DEFAULT_CURRENCY, pricedAt: new Date() };
+  }
+
+  /**
+   * The same itemised breakdown `quote()` produces, for an order created
+   * WITHOUT having asked for a quote first.
+   *
+   * `CreateOrderDto.quoteToken` is optional and a comment on the creation path
+   * asserted the real client app "always" sends it. It does — but the
+   * assertion was load-bearing and unenforced, and the branch behind it priced
+   * an order as `basePrice × litres` and nothing else: no service fee, no VAT.
+   * The same 10,000 L order was invoiced at 21,300 that way against 24,736.50
+   * through the quoted path, and nothing anywhere reported a discrepancy,
+   * because the cheaper figure was written to `estimatedPrice` and every later
+   * reader — approval, invoicing, credit — faithfully used it.
+   *
+   * An order is priced the same way whether or not the caller asked what it
+   * would cost first, so both paths now derive from `currentRates`. The
+   * delivery fee is still absent here for the same reason it is absent from a
+   * quote: no transporter has been chosen yet, and `RoutingService` adds it the
+   * moment one is.
+   */
+  async priceWithoutQuote(
+    fuelCompanyId: string,
+    fuelType: FuelType,
+    quantityLiters: number,
+  ): Promise<PriceBreakdown> {
+    const rates = await this.currentRates(fuelCompanyId, fuelType);
+    const breakdown = this.derive(
+      rates.unitPrice,
+      quantityLiters,
+      undefined,
+      rates.serviceFeePercent,
+      rates.taxRatePercent,
+    );
+    return { ...breakdown, currency: DEFAULT_CURRENCY, pricedAt: new Date() };
   }
 
   /** Quote expiry — short enough that a genuinely stale price is caught, long enough for a client to review a screen (default 10 minutes). */
@@ -147,11 +190,13 @@ export class PricingService {
     quantityLiters: number,
     target: DeliveryTarget,
   ): Promise<Quote> {
-    const rates = await this.currentRates(fuelCompanyId, fuelType, target);
+    const rates = await this.currentRates(fuelCompanyId, fuelType);
     const breakdown = this.derive(
       rates.unitPrice,
       quantityLiters,
-      rates.deliveryFee,
+      // No transporter is assigned at quote time, so there is no delivery fee
+      // to quote — the station owner sees the field empty (FR-011g as amended).
+      undefined,
       rates.serviceFeePercent,
       rates.taxRatePercent,
     );
@@ -162,7 +207,6 @@ export class PricingService {
       fuelType,
       quantityLiters,
       unitPrice: rates.unitPrice,
-      deliveryFee: rates.deliveryFee,
       serviceFeePercent: rates.serviceFeePercent,
       taxRatePercent: rates.taxRatePercent,
       expiresAt: expiresAt.toISOString(),
@@ -213,10 +257,11 @@ export class PricingService {
       });
     }
 
-    const rates = await this.currentRates(fuelCompanyId, fuelType, target);
+    const rates = await this.currentRates(fuelCompanyId, fuelType);
+    // A transporter's rate change can no longer make a quote stale, because a
+    // quote no longer names one. Only the fuel company's own rates can.
     const ratesChanged =
       rates.unitPrice !== payload.unitPrice ||
-      rates.deliveryFee !== payload.deliveryFee ||
       rates.serviceFeePercent !== payload.serviceFeePercent ||
       rates.taxRatePercent !== payload.taxRatePercent;
 
@@ -224,7 +269,7 @@ export class PricingService {
       const current = this.derive(
         rates.unitPrice,
         quantityLiters,
-        rates.deliveryFee,
+        undefined,
         rates.serviceFeePercent,
         rates.taxRatePercent,
       );
@@ -238,7 +283,7 @@ export class PricingService {
     const breakdown = this.derive(
       rates.unitPrice,
       quantityLiters,
-      rates.deliveryFee,
+      undefined,
       rates.serviceFeePercent,
       rates.taxRatePercent,
     );

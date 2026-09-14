@@ -46,7 +46,12 @@ describe('Fuel company RBAC — server-side denial matrix (FR-004, Constitution 
     body?: Record<string, unknown>;
     // Roles admitted alongside FUEL_COMPANY_ADMIN, if any — excluded from the refusal list
     // for this endpoint since they are legitimately admitted, not a leak.
-    alsoAdmits?: Array<'CLIENT' | 'DRIVER' | 'TRANSPORT_COMPANY_ADMIN'>;
+    //
+    // spec 017 T054/FR-020 widened the union to include SUPER_ADMIN: the platform
+    // operator is now admitted to force-complete, so this matrix needs a way to say
+    // "deliberately admitted" about that role too, rather than asserting a refusal the
+    // platform no longer makes.
+    alsoAdmits?: Array<'CLIENT' | 'DRIVER' | 'TRANSPORT_COMPANY_ADMIN' | 'SUPER_ADMIN'>;
   }
 
   // Every FUEL_COMPANY_ADMIN-only (or FUEL_COMPANY_ADMIN-plus-named-others) endpoint this
@@ -59,7 +64,17 @@ describe('Fuel company RBAC — server-side denial matrix (FR-004, Constitution 
     { name: 'PATCH /orders/:id/approve', method: 'patch', path: () => `/api/v1/orders/${PLACEHOLDER_ID}/approve` },
     { name: 'PATCH /orders/:id/route', method: 'patch', path: () => `/api/v1/orders/${PLACEHOLDER_ID}/route` },
     { name: 'PATCH /orders/:id/reject', method: 'patch', path: () => `/api/v1/orders/${PLACEHOLDER_ID}/reject` },
-    { name: 'PATCH /orders/:id/force-complete', method: 'patch', path: () => `/api/v1/orders/${PLACEHOLDER_ID}/force-complete` },
+    // spec 017 T054/FR-020: SUPER_ADMIN is now admitted here — the platform operator
+    // can force a delivery closed, on the same three stages and with the same recorded
+    // reason. The three other roles are still refused, which is what this row still
+    // proves. (The operator's own admission is asserted positively by
+    // `order-buckets.e2e-spec.ts` and `operator-authorization.e2e-spec.ts`.)
+    {
+      name: 'PATCH /orders/:id/force-complete',
+      method: 'patch',
+      path: () => `/api/v1/orders/${PLACEHOLDER_ID}/force-complete`,
+      alsoAdmits: ['SUPER_ADMIN'],
+    },
     // redispatch also admits CLIENT (spec 004) — refused list excludes it here.
     { name: 'POST /orders/:id/redispatch', method: 'post', path: () => `/api/v1/orders/${PLACEHOLDER_ID}/redispatch`, alsoAdmits: ['CLIENT'] },
     { name: 'PATCH /stations/:id', method: 'patch', path: () => `/api/v1/stations/${PLACEHOLDER_ID}` },

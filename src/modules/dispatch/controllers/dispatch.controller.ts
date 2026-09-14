@@ -4,6 +4,7 @@ import { AssignDriverDto } from '../dto/assign-driver.dto';
 import { Roles } from '../../../common/decorators/roles.decorator';
 import { UserRole } from '../../../common/enums/user-role.enum';
 import { ObjectIdPipe } from '../../../common/pipes/object-id.pipe';
+import { toSafeTruckShape } from '../../trucks/truck-shape';
 
 /**
  * spec 004 US4: driver assignment is the Transportation Company's own
@@ -16,10 +17,24 @@ import { ObjectIdPipe } from '../../../common/pipes/object-id.pipe';
 export class DispatchController {
   constructor(private readonly dispatchService: DispatchService) {}
 
+  /**
+   * `suggestedTruck` is mapped through `toSafeTruckShape` rather than returned
+   * as the document the service loaded. It carried `nfcCardUid` and `qrToken`
+   * — both credentials `VehicleVerificationService.resolveCredential` accepts
+   * — to every caller of this endpoint, which is precisely what FR-042 forbids
+   * and what `TrucksController` maps them away for. Nothing here needs either
+   * field: the screen shows a plate and pre-selects an id.
+   */
   @Roles(UserRole.TRANSPORT_COMPANY_ADMIN)
   @Get('orders/:id/candidates')
-  getCandidates(@Param('id', ObjectIdPipe) id: string) {
-    return this.dispatchService.getCandidates(id);
+  async getCandidates(@Param('id', ObjectIdPipe) id: string) {
+    const candidates = await this.dispatchService.getCandidates(id);
+    return candidates.map((candidate) => ({
+      ...candidate,
+      suggestedTruck: candidate.suggestedTruck
+        ? toSafeTruckShape(candidate.suggestedTruck)
+        : null,
+    }));
   }
 
   @Roles(UserRole.TRANSPORT_COMPANY_ADMIN)

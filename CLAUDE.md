@@ -1,4 +1,101 @@
 <!-- SPECKIT START -->
+Previously implemented feature: `specs/017-super-admin-dashboard-backend/plan.md`
+(finish the platform operator's dashboard surface — connect every remaining SUPER_ADMIN screen to
+real platform data, and build the missing backend capability where a screen asks for something the
+platform cannot answer). **Implemented — 170 of 172 tasks complete.** Supporting artifacts:
+`spec.md` (8 stories, 90 FRs, 14 SCs, 3 clarifications), `research.md` (14 decisions — R2, R3, R4,
+R8, R10 and R11 each overturn something the spec assumed), `data-model.md`, `quickstart.md`,
+`contracts/rest-api-delta.md`, `contracts/dashboard-integration.md`,
+`contracts/isolation-contract.md`, `tasks.md` (full Removals and Corrections tables in its Notes
+sections). **Spans two repositories**: this backend and the dashboard at
+`E:\zeyad\web_dashboard_ciro_fuel` (branch `017-super-admin-dashboard-backend` in both).
+
+**Implementation status**: all 8 user stories built and verified.
+· **Backend** — `npm run build` clean, `npx tsc --noEmit` clean, `npm run test` **330/330 across
+42 suites** (baseline was 316/40; two new unit suites). New e2e suites, each green in isolation:
+`company-type-filter` (15), `platform-overview` (24), `order-buckets` (29),
+`transport-onboarding` (20), `driver-roster` (20), `announcements` (21), `operator-profile` (15),
+`cashback-payout` (16), `operator-authorization` (65) — **225 new e2e tests**.
+· **Dashboard** — `tsc -b --force` reports **28** `TS6133`/`TS6192` unused-import errors, DOWN
+from the 31 baseline and none in a file this feature touched; `vitest run` **127/127**, identical to
+baseline, with the same 2 pre-existing suites failing to *load* (`accessibility.test.tsx`,
+`orders.mutations.test.tsx`). i18n key parity between `ar.json` and `en.json` verified exactly.
+
+· **Full `npm run test:e2e`** — **97 of 102 suites, 756 of 766 tests**, and **all ten suites
+this feature wrote pass, in isolation AND inside the full run.** The 5 failing suites are each
+accounted for in `tasks.md` and none is a regression:
+  · `fuel-company-rbac` DID fail on the first full run and was a real, required fix — it asserted
+    force-complete **refuses** SUPER_ADMIN, the rule FR-020 deliberately reverses. Findable only by a
+    full run, since the contradiction lives between two files that each pass alone. Now green.
+  · `request-logging` passes in isolation (8/8) — the documented resource-pressure set.
+  · `file-storage` fails deterministically on this Windows checkout (path separator), in files
+    this feature never touched.
+  · `login-code`, `login-abuse`, `admin-multi-session` fail **deterministically, not
+    flakily** — 429 from the pre-existing per-IP login throttle (10/min), which suites about multiple
+    concurrent sessions necessarily exceed. Feature 015 recorded all three as written but NEVER
+    EXECUTED, so they have never been green. This feature touches neither the throttler, its storage,
+    nor the login path.
+
+**Not completed — needs an environment this session did not have**: T157 (the `quickstart.md`
+Parts 1–8 walkthrough, needs a running server) and T158 (`flutter test`, a repository not on this
+machine — and a DEPLOY GATE).
+
+**What the research changed, and what it was right about**: every one of the four documented traps
+was real, and each guard test catches it. The cashback payout DOES need a two-kind derivation — the
+per-kind `getConfirmedBalance` returns a plausible, unchanged number after a payout. The driver
+roster DOES need its own query rather than `getSuggestedTruck`, whose availability filter would make
+a driver whose truck is on a job read as "never driven". The announcement fan-out DOES need
+`companyId` stamped by hand, and the delivery test authenticates as the RECIPIENT for exactly that
+reason. The bucket filter IS a `$in` and never a `$or`, with an e2e guard as a `FUEL_COMPANY_ADMIN`
+because a unit test correctly registers no scoping plugin at all.
+
+**Binding decisions, all held**: Story 2 landed first and alone · the order-bucket filter is
+`status: { $in: [...] }` · announcement retry-safety is a unique index, not an application pre-read ·
+the cashback payout is one transaction re-reading the owed balance inside the session, created
+already `CONFIRMED`, with a partial unique index carrying the duplicate-reference refusal ·
+`direction` is derived in the response, never added to the schema · `Announcement` carries no
+scoping marker · the driver roster derives the last truck in one aggregate projecting `truckId`
+alone. **No migration — this feature rewrote nothing and added no field to any existing document.**
+**Neither scoping plugin was modified, and neither `findByPhoneForAuth` nor
+`findSingleActiveAdminByPhone` was touched** (verified against the isolation contract at T154).
+
+**Corrections found while implementing** — the full log is in `tasks.md`'s *Corrections* section.
+The ones worth surfacing:
+· **`SettlementMethod` has TWO values, not four.** The payout screen was first written against
+`BANK_TRANSFER | SADAD | CASH` — invented. The platform's enum is
+`BANK_TRANSFER | NATIONAL_PAYMENT_SERVICE`; "Sadad" is the CLIENT's order payment channel
+(`PaymentMethod`), a different concept on a different document. A payout submitted from the
+dropdown would have been refused by the DTO naming a value the operator could see.
+· **`AnnouncementDelivery.recipientUserId` cannot be required**, because the data model also
+requires `NO_ACTIVE_ADMIN` to be recorded against a COMPANY with no person to name. Made optional
+with the unique index split in two, each partial on whether the recipient id exists — without that
+split every company-addressed row would collide on a missing key.
+· **The fan-out resolver could not report a suspended company at all** as first written: it filtered
+unreachable recipients away, so FR-054's "skipped, with a named reason" had nothing to name them
+from. Split into `resolveCandidates` (everyone, each marked) and `resolveRecipients` (the reachable
+ones, for the 202's count).
+· **T090's column-configuration approach was deliberately not taken.** The operator's driver screen
+renders its own table rather than adding a column config to the transport company's shared
+components — the forbidden columns are then *unreachable* rather than switched off by a flag, and
+the transport screen stays untouched as FR-075 requires.
+· **The fan-out left a LYING delivery row if the notification write failed** — neither delivered nor
+failed, so the next at-least-once redelivery skipped that recipient permanently and nothing said so.
+The row is now removed before rethrowing. Found by reading the failure path, not by a test.
+· **Disclosed, not fixed**: `buildStorageKey` builds a GCS object key with `path.join`, so on a
+Windows host the key carries literal backslashes. Pre-existing, untouched by this feature, nil
+runtime risk on the Linux deployment target — left for its own change because the fix touches
+feature 012's frozen `storagePath` payload.
+· **Three dashboard "controls" were editing nothing**: the transport-company info card and the
+operator's own account card both wrote to local `useState`, and the suspend/reinstate button flipped
+a boolean and called no route. The first two are now read-only (no platform route exists to back
+them); the third calls the existing operator-only status route.
+
+**Pre-deploy gate**: `flutter test` must run before deploy. This feature adds
+`NotificationType.PLATFORM_ANNOUNCEMENT` and spec 007 installed a parity test in the mobile repo
+pinning the Flutter enum to the backend's wire values; that repo is not on this machine. No
+administrator has a mobile persona, so no mobile client will ever receive the type — the runtime risk
+is nil and the test risk is real.
+
 Previously implemented feature: `specs/016-broadcast-fuel-exchange/plan.md`
 (a fuel company raises ONE exchange offer that reaches every fuel company on the platform; each
 answers blind with a proposed price, and the raiser awards exactly one). **Implemented — 116 of

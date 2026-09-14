@@ -54,8 +54,20 @@ export class PhoneVerificationService {
     // so this lookup must bypass the caller's own tenant scope — otherwise
     // the tenant-scope plugin would silently confine it to the caller's
     // own company and miss a holder elsewhere.
+    //
+    // spec 017 T121/FR-061: this was `findByPhoneForAuth`, which is scoped to
+    // CLIENT/DRIVER **on purpose** — so it could not see administrator
+    // accounts, and an administrator changing onto another administrator's
+    // number passed this check, SPENT an SMS, and was refused only at confirm
+    // by the unique index. That is precisely the promise the comment above
+    // makes and the code did not keep, ever since feature 015 extended the
+    // partial unique phone index to all five roles (research R10).
+    //
+    // `findAnyByPhone` is role- AND active-agnostic: a deactivated account
+    // still holds its number as far as the index is concerned, so a change onto
+    // it would fail at confirm too.
     const holder = await this.tenantContext.runUnscoped(() =>
-      this.usersService.findByPhoneForAuth(newPhone),
+      this.usersService.findAnyByPhone(newPhone),
     );
     if (holder && String(holder._id) !== userId) {
       throw new ConflictException({

@@ -13,6 +13,27 @@ import { FuelType } from '../../src/common/enums/fuel-type.enum';
 jest.setTimeout(120_000);
 
 /**
+ * Every number anywhere in a payload, so a price leak is caught by VALUE.
+ *
+ * `JSON.stringify(body).not.toContain('2.2')` ALSO matches an ISO timestamp
+ * whose milliseconds read `…:32.210Z`, and `'9.99'` matches `…:09.990Z` — the
+ * assertion fails on the clock rather than on a leak. Feature 011 hit exactly
+ * this with `not.toContain('950')` (~14% of runs) and fixed it the same way;
+ * these two suites were written before that fix and never adopted it.
+ *
+ * An ObjectId is still checked as a substring: 24 hex characters cannot
+ * collide with a timestamp.
+ */
+function numericValuesIn(value: unknown): number[] {
+  if (typeof value === 'number') return [value];
+  if (Array.isArray(value)) return value.flatMap(numericValuesIn);
+  if (value && typeof value === 'object') {
+    return Object.values(value as Record<string, unknown>).flatMap(numericValuesIn);
+  }
+  return [];
+}
+
+/**
  * spec 016 (broadcast fuel exchange offers) T055/T055a/T056/research R12 — FR-011b is a
  * property of what a company can OBTAIN, so every assertion here reads the RAW response
  * body rather than trusting that a screen chose not to render a field.
@@ -80,7 +101,7 @@ describe('Exchange proposal blindness (US2)', () => {
       .set('Authorization', `Bearer ${adminB.token}`)
       .expect(200);
     const rawB = JSON.stringify(detailForB.body);
-    expect(rawB).not.toContain('9.99');
+    expect(numericValuesIn(detailForB.body)).not.toContain(9.99);
     expect(rawB).not.toContain(companyIdC);
     expect(detailForB.body).not.toHaveProperty('proposals');
     expect(detailForB.body).not.toHaveProperty('proposalCount');
@@ -92,7 +113,7 @@ describe('Exchange proposal blindness (US2)', () => {
       .set('Authorization', `Bearer ${adminB.token}`)
       .expect(200);
     const rawListB = JSON.stringify(listForB.body);
-    expect(rawListB).not.toContain('9.99');
+    expect(numericValuesIn(listForB.body)).not.toContain(9.99);
     expect(rawListB).not.toContain(companyIdC);
     for (const item of listForB.body.items) {
       expect(item).not.toHaveProperty('proposalCount');
@@ -226,7 +247,7 @@ describe('Exchange proposal blindness (US2)', () => {
       .expect(200);
     expect(detailForC.body.state).toBe('AWARDED');
     const rawC = JSON.stringify(detailForC.body);
-    expect(rawC).not.toContain('2.2'); // the winning price
+    expect(numericValuesIn(detailForC.body)).not.toContain(2.2); // the winning price
     expect(rawC).not.toContain(String(fixtures.companyB.companyId)); // the winner's identity
     expect(detailForC.body).not.toHaveProperty('agreedUnitPrice');
     expect(detailForC.body).not.toHaveProperty('awardedCompanyId');
@@ -241,7 +262,7 @@ describe('Exchange proposal blindness (US2)', () => {
     );
     expect(closedNotice).toBeDefined();
     const rawNotice = JSON.stringify(closedNotice);
-    expect(rawNotice).not.toContain('2.2');
+    expect(numericValuesIn(closedNotice)).not.toContain(2.2);
     expect(rawNotice).not.toContain(String(fixtures.companyB.companyId));
   });
 

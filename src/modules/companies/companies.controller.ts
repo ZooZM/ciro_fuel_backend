@@ -9,6 +9,7 @@ import {
   Patch,
   Post,
   Put,
+  Query,
   UnauthorizedException,
   UploadedFile,
   UseInterceptors,
@@ -25,6 +26,7 @@ import { FilePurpose } from '../files/schemas/file.schema';
 import { ALLOWED_MIME_TYPES, MAX_FILE_SIZE_BYTES } from '../files/files.constants';
 import { CreateFuelCompanyDto } from './dto/create-fuel-company.dto';
 import { CreateTransportCompanyDto } from './dto/create-transport-company.dto';
+import { OnboardTransportCompanyDto } from './dto/onboard-transport-company.dto';
 import { AssignRegionsDto } from './dto/assign-regions.dto';
 import { UpdateCompanyStatusDto } from './dto/update-company-status.dto';
 import { SetFuelPricesDto } from './dto/set-fuel-prices.dto';
@@ -40,6 +42,7 @@ import { CompanyType } from '../../common/enums/company-type.enum';
 import { AuthenticatedUser } from '../../common/interfaces/jwt-payload.interface';
 import { ObjectIdPipe } from '../../common/pipes/object-id.pipe';
 import { governorateBelongsToRegion } from '../regions/regions.constants';
+import { parseEnumQuery } from '../../common/validation/parse-enum-query';
 
 @Controller({ path: 'companies', version: '1' })
 export class CompaniesController {
@@ -146,9 +149,24 @@ export class CompaniesController {
   // (spec 004 US1) — narrowed in the service, not by an extra route.
   @Roles(UserRole.SUPER_ADMIN, UserRole.FUEL_COMPANY_ADMIN)
   @Get()
-  findAll(@CurrentUser() user: AuthenticatedUser) {
+  findAll(
+    @CurrentUser() user: AuthenticatedUser,
+    // spec 017 (operator dashboard) FR-010/FR-013: until now this handler bound
+    // NO query parameters at all. The dashboard has been sending `?type=FUEL`
+    // since feature 013 and the platform has never read it, so the operator's
+    // fuel-company list and its count card have been counting transporters
+    // (research R2). Both filters are validated here and passed through on BOTH
+    // branches — a filter that applied only to the operator would leave FR-012
+    // unasserted on the branch that actually needs it.
+    @Query('type') type?: string,
+    @Query('status') status?: string,
+  ) {
+    const filter = {
+      type: parseEnumQuery(CompanyType, type, 'type'),
+      status: parseEnumQuery(CompanyStatus, status, 'status'),
+    };
     if (user.role === UserRole.SUPER_ADMIN) {
-      return this.companiesService.findAll();
+      return this.companiesService.findAll(filter);
     }
     // `Company` has no automatic isolation plugin (it is the tenant root),
     // so this endpoint is the enforcement point. A non-SUPER_ADMIN with no
@@ -158,7 +176,8 @@ export class CompaniesController {
     if (!user.companyId) {
       throw new UnauthorizedException('Invalid credentials');
     }
-    return this.companiesService.findAll(user.companyId);
+    // FR-012: the type/status filters INTERSECT this narrowing, never widen it.
+    return this.companiesService.findAll({ ...filter, id: user.companyId });
   }
 
   @Get(':id')
@@ -300,6 +319,87 @@ export class CompaniesController {
   async listTransporters(@CurrentUser() user: AuthenticatedUser, @Param('id', ObjectIdPipe) id: string) {
     this.assertCompanyAccess(user, id);
     return this.companiesService.findTransporters(id);
+  }
+
+  /**
+   * spec 017 (operator dashboard) T067/T068/FR-027–FR-031 — the PLATFORM
+   * OPERATOR onboards a transport company and its first administrator.
+   *
+   * Declared **before** `:id/transporters` below: Nest matches routes in
+   * declaration order, and `transporters` would otherwise be captured as an
+   * `:id` by that route's parameter.
+   *
+   * The transaction is `createTransporter`'s, verbatim — one unit of work, so a
+   * duplicate administrator email leaves neither company nor admin (FR-028).
+   *
+   * **Its post-insert `companyId` correction is deliberately OMITTED**, and
+   * that is the one thing about this handler worth reading twice (research
+   * R12). That correction exists because the tenant plugin's `pre('save')` hook
+   * overwrites a new document's `companyId` with the ACTING user's tenant — so
+   * a `FUEL_COMPANY_ADMIN` creating a transporter's admin would otherwise stamp
+   * their OWN company onto it. A `SUPER_ADMIN` has no tenant: the hook takes
+   * its role bypass and writes nothing, the insert lands with the companyId it
+   * was given, and copying the correction would perform a pointless second
+   * write whose only effect is to make a reader believe the hook fired here.
+   *
+   * FR-031/SC-006: a transporter onboarded here must be indistinguishable from
+   * one its parent fuel company created itself. That is why this reuses
+   * `createTransportCompany` rather than writing the document directly.
+   */
+  @Roles(UserRole.SUPER_ADMIN)
+  @Post('transporters')
+  async onboardTransporter(@Body() dto: OnboardTransportCompanyDto) {
+    // Verified BEFORE any write: the named parent must exist AND be of type
+    // FUEL. A merely-present id satisfies FR-030's letter and none of its
+    // purpose — a transport company parented to another transport company
+    // would sign in, appear in every list, and never receive an order, because
+    // routing resolves a transporter through its parent FUEL company.
+    const parent = await this.companiesService.findById(dto.parentFuelCompanyId).catch(() => null);
+    if (!parent || parent.type !== CompanyType.FUEL) {
+      throw new BadRequestException({
+        error: ErrorCode.INVALID_PARENT_FUEL_COMPANY,
+        message: 'parentFuelCompanyId must name an existing FUEL company',
+      });
+    }
+
+    const session = await this.connection.startSession();
+    let transporter!: CompanyDocument;
+    let admin!: Awaited<ReturnType<UsersService['create']>>;
+    try {
+      await session.withTransaction(async () => {
+        transporter = await this.companiesService.createTransportCompany(
+          dto.parentFuelCompanyId,
+          {
+            name: dto.name,
+            contactEmail: dto.contactEmail,
+            contactPhone: dto.contactPhone,
+            status: CompanyStatus.ACTIVE,
+          },
+          session,
+        );
+
+        admin = await this.usersService.create(
+          {
+            companyId: transporter._id as never,
+            role: UserRole.TRANSPORT_COMPANY_ADMIN,
+            email: dto.adminEmail,
+            password: dto.adminPassword,
+            fullName: dto.adminFullName,
+            phone: dto.adminPhone,
+            isActive: true,
+          },
+          session,
+        );
+        // No companyId correction here — see this handler's own note above.
+      });
+    } finally {
+      await session.endSession();
+    }
+
+    return {
+      company: transporter,
+      admin: { id: admin._id, email: admin.email },
+    };
   }
 
   // spec 004 US2: a Fuel Company creates its own Transportation Companies.

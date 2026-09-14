@@ -8,8 +8,7 @@ import {
   seedTwoCompanies,
   TwoCompanyFixture,
   assignAndDepart,
-  resetFixtureDispatchState,
-} from '../utils/fixtures';
+  resetFixtureDispatchState, settleClientReview } from '../utils/fixtures';
 import { User, UserDocument } from '../../src/modules/users/schemas/user.schema';
 import { PresenceService } from '../../src/modules/tracking/presence/presence.service';
 import { OrderStatus } from '../../src/common/enums/order-status.enum';
@@ -86,8 +85,12 @@ describe('Driver presence (US4) — offline detection & recovery', () => {
       .set('Authorization', `Bearer ${admin.token}`)
       .send({})
       .expect(200);
-    expect(approveRes.body.status).toBe(OrderStatus.ROUTED_TO_TRANSPORT);
+    // Routing now prices the haul and hands the order back to the station
+    // owner, so approval lands on PENDING_PAYMENT rather than going straight
+    // to the transporter; the settlement step below is what releases it.
+    expect(approveRes.body.status).toBe(OrderStatus.PENDING_PAYMENT);
 
+    await settleClientReview(app, createRes.body._id);
     const candidates = await request(server)
       .get(`/api/v1/dispatch/orders/${createRes.body._id}/candidates`)
       .set('Authorization', `Bearer ${transportAdmin.token}`)
@@ -125,14 +128,19 @@ describe('Driver presence (US4) — offline detection & recovery', () => {
       .set('Authorization', `Bearer ${admin.token}`)
       .send({})
       .expect(200);
-    expect(approveRes.body.status).toBe(OrderStatus.ROUTED_TO_TRANSPORT);
+    // Routing now prices the haul and hands the order back to the station
+    // owner, so approval lands on PENDING_PAYMENT rather than going straight
+    // to the transporter; the settlement step below is what releases it.
+    expect(approveRes.body.status).toBe(OrderStatus.PENDING_PAYMENT);
 
+    await settleClientReview(app, createRes.body._id);
     const candidates = await request(server)
       .get(`/api/v1/dispatch/orders/${createRes.body._id}/candidates`)
       .set('Authorization', `Bearer ${transportAdmin.token}`)
       .expect(200);
     expect(candidates.body.map((c: { _id: string }) => c._id)).toEqual([driver.id]);
 
+    await settleClientReview(app, createRes.body._id);
     const assignRes = await request(server)
       .post(`/api/v1/dispatch/orders/${createRes.body._id}/assign`)
       .set('Authorization', `Bearer ${transportAdmin.token}`)

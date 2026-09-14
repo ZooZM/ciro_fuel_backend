@@ -30,8 +30,27 @@ export class PriceBreakdown {
   @Prop({ required: true, min: 0 })
   fuelLineTotal!: number;
 
-  @Prop({ required: true, min: 0 })
-  deliveryFee!: number;
+  /**
+   * **Absent until a transport company is assigned.**
+   *
+   * The delivery leg is priced by the company that performs it, and that
+   * company is not chosen until routing — so at quotation and at order
+   * creation there is no transport price to state. Absence IS that state, and
+   * it is a different fact from `0`, which would read as "delivery is free".
+   * The station owner's screen shows the field empty on the strength of this,
+   * not on the strength of a zero it has to interpret.
+   *
+   * This follows the platform's established treatment of a value that is not
+   * yet knowable — `User.ratingAverage` has no default for the same reason,
+   * and the supplier-invoice section omits its key entirely rather than
+   * returning zeros.
+   *
+   * Set exactly once, by `RoutingService` at ROUTED_TO_TRANSPORT, from the
+   * chosen transporter's own `deliveryRates`. Orders created before this
+   * change all carry a value and are unaffected — there is no migration.
+   */
+  @Prop({ min: 0 })
+  deliveryFee?: number;
 
   @Prop({ required: true, min: 0 })
   serviceFee!: number;

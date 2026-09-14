@@ -1,7 +1,7 @@
 import request from 'supertest';
 import { INestApplication } from '@nestjs/common';
 import { createTestApp, TestAppContext } from '../utils/test-app.factory';
-import { DEFAULT_WAREHOUSE_LOCATION, seedTwoCompanies, TwoCompanyFixture } from '../utils/fixtures';
+import { DEFAULT_WAREHOUSE_LOCATION, seedTwoCompanies, TwoCompanyFixture, settleClientReview } from '../utils/fixtures';
 import { CompaniesService } from '../../src/modules/companies/companies.service';
 import { OrderStatus } from '../../src/common/enums/order-status.enum';
 
@@ -60,6 +60,26 @@ describe('Platform & company onboarding (US5)', () => {
       .send({ prices: [{ fuelType: 'DIESEL', basePricePerLiter: 3.0 }] })
       .expect(200);
 
+    // 3b. …and a pricing configuration, which this walkthrough used to skip.
+    // A fuel price alone does not make a company tradeable: the service fee and
+    // the tax rate live here, and without them there is no lawful total to put
+    // on an invoice. `POST /orders/quote` — the only path the real client app
+    // takes — has always refused such a company with PRICING_NOT_CONFIGURED, so
+    // an onboarding that stopped at fuel prices produced a company no customer
+    // could actually order from. Order creation now refuses it the same way
+    // instead of quietly pricing the fuel line alone, which is what makes this
+    // step part of the sequence rather than an optional extra.
+    await request(server)
+      .put(`/api/v1/companies/${companyId}/pricing-config`)
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({
+        deliveryFee: 30,
+        serviceFeePercent: 1,
+        taxRatePercent: 15,
+        tankerCapacitiesLiters: [20000, 30000],
+      })
+      .expect(200);
+
     // 4. Admin creates a CLIENT with a station location.
     const clientRes = await request(server)
       .post('/api/v1/users')
@@ -108,6 +128,18 @@ describe('Platform & company onboarding (US5)', () => {
       .send({ email: 'transportadmin@onboardtest.test', password: 'Password123!' })
       .expect(201);
     const transportAdminToken = transportAdminLogin.body.accessToken;
+
+    // Onboarding a transporter now takes one more step before it can be routed
+    // work: it must price the areas it serves. The delivery leg is priced by
+    // the company that performs it, so routing to one that has set no rate
+    // would produce an order nobody can bill — the platform refuses it with
+    // `TRANSPORT_PRICE_NOT_SET` rather than inventing a figure. Covering a
+    // region and pricing it are now two distinct acts of onboarding.
+    await request(server)
+      .put(`/api/v1/companies/${transportCompanyId}/delivery-rates`)
+      .set('Authorization', `Bearer ${transportAdminToken}`)
+      .send({ rates: [{ regionCode: 'RIYADH', pricePerKm: 0, minPrice: 30 }] })
+      .expect(200);
 
     const driverRes = await request(server)
       .post('/api/v1/users')
@@ -176,19 +208,29 @@ describe('Platform & company onboarding (US5)', () => {
       .set('Authorization', `Bearer ${clientLogin.body.accessToken}`)
       .send({ fuelType: 'DIESEL', quantityLiters: 500, paymentMethod: 'DEFERRED' })
       .expect(201);
-    expect(orderRes.body.estimatedPrice).toBeCloseTo(3.0 * 500, 2);
+    // Fuel line, then the 1% service fee, then 15% VAT on the two — the same
+    // derivation a quoted order gets. The haul is added at routing, not here.
+    const fuelLine = 3.0 * 500;
+    expect(orderRes.body.estimatedPrice).toBeCloseTo(
+      Math.round(fuelLine * 1.01 * 1.15 * 100) / 100,
+      2,
+    );
 
     const approveRes = await request(server)
       .patch(`/api/v1/orders/${orderRes.body._id}/approve`)
       .set('Authorization', `Bearer ${adminToken}`)
       .send({})
       .expect(200);
-    expect(approveRes.body.status).toBe(OrderStatus.ROUTED_TO_TRANSPORT);
+    // Routing now prices the haul and hands the order back to the station
+    // owner, so approval lands on PENDING_PAYMENT rather than going straight
+    // to the transporter; the settlement step below is what releases it.
+    expect(approveRes.body.status).toBe(OrderStatus.PENDING_PAYMENT);
     expect(approveRes.body.transportCompanyId).toBe(transportCompanyId);
 
     // The new transporter sees the new driver among their candidates and
     // assigns them, their truck and their tank (spec 004 FR-017/FR-018,
     // spec 008 FR-009).
+    await settleClientReview(app, orderRes.body._id);
     const assignRes = await request(server)
       .post(`/api/v1/dispatch/orders/${orderRes.body._id}/assign`)
       .set('Authorization', `Bearer ${transportAdminToken}`)

@@ -51,6 +51,12 @@ const TRANSITIONS: Record<OrderStatus, TransitionRule[]> = {
   ],
   [OrderStatus.ROUTED_TO_TRANSPORT]: [
     { to: OrderStatus.ASSIGNED_TO_DRIVER },
+    // Routing is what makes the total knowable — the transport company that
+    // was just chosen is the one that prices the haul — so the order goes back
+    // to the station owner to settle before any driver is assigned. This edge
+    // and its return below replace the old APPROVED -> PENDING_PAYMENT one,
+    // which gated payment on a total that did not yet include the haul.
+    { to: OrderStatus.PENDING_PAYMENT },
     { to: OrderStatus.CANCELLED },
   ],
   // spec 008: LOADING replaces the direct edge to IN_TRANSIT — reached by a
@@ -58,11 +64,16 @@ const TRANSITIONS: Record<OrderStatus, TransitionRule[]> = {
   // assignment itself (FR-046a).
   [OrderStatus.ASSIGNED_TO_DRIVER]: [{ to: OrderStatus.LOADING }, { to: OrderStatus.CANCELLED }],
   [OrderStatus.PENDING_PAYMENT]: [
-    // Settlement (routing resumes next, orders.service.ts) AND the
-    // payment-deadline timeout (FR-015a, redispatch re-opens the window)
-    // are the same edge — see the block comment above.
+    // The station owner settled (DIRECT) or accepted (DEFERRED/CREDIT): the
+    // order returns to the transporter it was already routed to, and the
+    // driver assignment that was waiting behind it can proceed.
+    { to: OrderStatus.ROUTED_TO_TRANSPORT },
+    // The payment-deadline timeout (FR-015a) — redispatch re-opens the window
+    // from APPROVED. Routing is NOT undone: `transportCompanyId` and the
+    // priced breakdown both survive, so re-opening asks the same station owner
+    // to settle the same total rather than re-running the choice.
     { to: OrderStatus.APPROVED },
-    { to: OrderStatus.CANCELLED }, // admin cancel OR client declines final price (FR-009)
+    { to: OrderStatus.CANCELLED }, // admin cancel OR station owner refuses the total
   ],
   // spec 008 FR-046d/FR-046e: loading confirmation (or override) reaches
   // IN_TRANSIT; cancellation stays reachable while the truck is still at the

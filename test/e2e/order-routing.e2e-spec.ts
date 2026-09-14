@@ -4,6 +4,8 @@ import { createTestApp, TestAppContext } from '../utils/test-app.factory';
 import { seedTwoCompanies, TwoCompanyFixture } from '../utils/fixtures';
 import { OrderStatus } from '../../src/common/enums/order-status.enum';
 
+import { CompaniesService } from '../../src/modules/companies/companies.service';
+import { RegionCode } from '../../src/common/enums/region.enum';
 jest.setTimeout(120_000);
 
 /** Spec 004 User Story 4 — routing resolution outcomes: none, one, and
@@ -73,7 +75,7 @@ describe('Order routing (spec 004 US4)', () => {
       .set('Authorization', `Bearer ${admin.token}`)
       .send({ transportCompanyId: fixtures.companyA.transportCompanyId })
       .expect(200);
-    expect(routeRes.body.status).toBe(OrderStatus.ROUTED_TO_TRANSPORT);
+    expect(routeRes.body.status).toBe(OrderStatus.PENDING_PAYMENT);
     expect(routeRes.body.transportCompanyId).toBe(fixtures.companyA.transportCompanyId);
   });
 
@@ -108,7 +110,7 @@ describe('Order routing (spec 004 US4)', () => {
       .set('Authorization', `Bearer ${admin.token}`)
       .send({})
       .expect(200);
-    expect(approveRes.body.status).toBe(OrderStatus.ROUTED_TO_TRANSPORT);
+    expect(approveRes.body.status).toBe(OrderStatus.PENDING_PAYMENT);
     expect(approveRes.body.transportCompanyId).toBe(transportCompanyId);
   });
 
@@ -136,6 +138,15 @@ describe('Order routing (spec 004 US4)', () => {
       .set('Authorization', `Bearer ${admin.token}`)
       .send({ regionCodes: ['RIYADH'] })
       .expect(200);
+    // Covering a region and pricing it are two distinct acts: routing to a
+    // transporter that has set no rate is refused, because the delivery leg is
+    // priced by the company that performs it. Written by the TRANSPORT admin —
+    // a fuel company may read what its transporter charges but never set it.
+    await app
+      .get(CompaniesService)
+      .setDeliveryRates(String(secondTransporter.body.company._id), [
+        { regionCode: RegionCode.RIYADH, pricePerKm: 0, minPrice: 30 },
+      ]);
 
     const createRes = await request(server)
       .post('/api/v1/orders')
@@ -164,7 +175,7 @@ describe('Order routing (spec 004 US4)', () => {
       .set('Authorization', `Bearer ${admin.token}`)
       .send({ transportCompanyId: String(secondTransporter.body.company._id) })
       .expect(200);
-    expect(routedRes.body.status).toBe(OrderStatus.ROUTED_TO_TRANSPORT);
+    expect(routedRes.body.status).toBe(OrderStatus.PENDING_PAYMENT);
     expect(routedRes.body.transportCompanyId).toBe(String(secondTransporter.body.company._id));
 
     // Withdraw this test's second transporter so it doesn't leak a lingering

@@ -29,7 +29,6 @@ import { NotificationType } from '../../common/enums/notification-type.enum';
 import { SYSTEM_ACTOR } from '../../common/constants/system-actor';
 import { UserRole } from '../../common/enums/user-role.enum';
 import { InvoicesService } from '../invoices/invoices.service';
-import { RoutingService } from '../dispatch/services/routing.service';
 import { isDuplicateKeyError } from '../../common/utils/mongo-error.util';
 
 export interface WebhookResult {
@@ -52,7 +51,6 @@ export class PaymentsService {
     private readonly notificationsService: NotificationsService,
     private readonly config: ConfigService,
     private readonly invoicesService: InvoicesService,
-    private readonly routingService: RoutingService,
   ) {}
 
   /** A CLIENT's own confirmed payments (spec 005 FR-023), paginated,
@@ -148,15 +146,21 @@ export class PaymentsService {
     let confirmedOrder: OrderDocument | undefined;
     try {
       await session.withTransaction(async () => {
-        // Settling the invoice and reverting PENDING_PAYMENT -> APPROVED
-        // happen together — if either fails the whole transaction rolls
-        // back, so a webhook can never leave the invoice settled with the
-        // order still gating payment, or vice versa.
+        // Settling the invoice and moving the order on happen together — if
+        // either fails the whole transaction rolls back, so a webhook can never
+        // leave the invoice settled with the order still gating payment, or
+        // vice versa.
+        //
+        // The destination is ROUTED_TO_TRANSPORT, not APPROVED. Under the
+        // amended flow the order was ALREADY routed before the station owner
+        // was asked to pay — routing is what priced the haul and produced the
+        // total they are settling — so settlement resumes the transporter it
+        // already has rather than sending it back to be routed.
         await this.invoicesService.settleInvoiceForOrder(order._id, dto.transactionId, session);
         confirmedOrder = await this.orderStateService.transition(
           order._id as Types.ObjectId,
           OrderStatus.PENDING_PAYMENT,
-          OrderStatus.APPROVED,
+          OrderStatus.ROUTED_TO_TRANSPORT,
           SYSTEM_ACTOR,
           {
             session,
@@ -168,19 +172,16 @@ export class PaymentsService {
 
       if (confirmedOrder) {
         await this.paymentTimeoutQueue.cancel(String(order._id));
-        // Routing resumes now that settlement unblocked it (FR-020a) —
-        // exactly the step approval itself takes for DEFERRED/CREDIT orders.
-        const { order: routed } = await this.routingService.routeOrder(
-          confirmedOrder,
-          SYSTEM_ACTOR,
-          OrderStatus.APPROVED,
-        );
+        // No routing call here any more — the order was routed before payment
+        // was ever asked for, which is what removed this service's dependency
+        // on `RoutingService` (and with it the DispatchModule -> PaymentsModule
+        // cycle that dependency used to force).
         await this.notificationsService.notify({
           companyId: order.fuelCompanyId,
           recipientUserId: order.clientId,
           type: NotificationType.ORDER_STATUS_CHANGED,
           orderId: order._id as Types.ObjectId,
-          payload: { status: routed.status },
+          payload: { status: confirmedOrder.status },
         });
         this.logger.log(
           `Payment webhook outcome=CONFIRMED order=${order._id} gatewayTxn=${dto.transactionId}`,

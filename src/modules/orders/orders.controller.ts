@@ -43,6 +43,15 @@ import { VerificationStage } from '../../common/enums/verification-stage.enum';
 import { ErrorCode } from '../../common/enums/error-code.enum';
 import { AuthenticatedUser } from '../../common/interfaces/jwt-payload.interface';
 import { ObjectIdPipe } from '../../common/pipes/object-id.pipe';
+import { parseEnumQuery } from '../../common/validation/parse-enum-query';
+import {
+  ORDER_STATUS_BUCKETS,
+  OrderStatusBucket,
+} from '../../common/constants/order-status-buckets';
+import {
+  FORCE_COMPLETABLE_STATUSES,
+  isForceCompletable,
+} from '../../common/constants/force-completable-statuses';
 import { OrderDocument, OtpPurpose } from './schemas/order.schema';
 import { NotificationType } from '../../common/enums/notification-type.enum';
 import { StationsService } from '../stations/stations.service';
@@ -122,16 +131,18 @@ export class OrdersController {
   }
 
   /**
-   * Feature 009 FR-059-061/FR-067, extended by spec 013 T109/T111/FR-044/FR-046: the
-   * dashboard overview for whichever role calls it. TRANSPORT_COMPANY_ADMIN/SUPER_ADMIN
-   * keep the original `OrderSummaryDto` shape (`driversOnDuty`/`awaitingAssignment` are
-   * meaningful for a transporter, and SUPER_ADMIN bypasses isolation for a genuine
-   * platform-wide read of it). FUEL_COMPANY_ADMIN gets `FuelCompanySummaryDto` instead —
+   * Feature 009 FR-059-061/FR-067, extended by spec 013 T109/T111/FR-044/FR-046 and
+   * again by spec 017 T052/FR-023: the dashboard overview for whichever role calls it.
+   * **Three roles, three shapes.** TRANSPORT_COMPANY_ADMIN keeps the original
+   * `OrderSummaryDto`. FUEL_COMPANY_ADMIN gets `FuelCompanySummaryDto` instead —
    * a real, different shape, not the same fields with the meaningless ones zeroed out
    * (T111's finding: `driversOnDuty` would always be 0 for this role, since drivers
    * belong to transport companies, and `awaitingAssignment` names a decision point that
-   * isn't this role's to make). `from`/`to` default to the current month when omitted;
-   * both are read as whole-day boundaries.
+   * isn't this role's to make). SUPER_ADMIN gets `PlatformSummaryDto`, the six order
+   * buckets — until spec 017 the operator fell through to the TRANSPORT shape and
+   * received a transporter's questions answered platform-wide (research R5).
+   * `from`/`to` default to the current month when omitted; both are read as whole-day
+   * boundaries.
    */
   @Roles(UserRole.TRANSPORT_COMPANY_ADMIN, UserRole.SUPER_ADMIN, UserRole.FUEL_COMPANY_ADMIN)
   @Get('summary')
@@ -146,6 +157,16 @@ export class OrdersController {
     if (user.role === UserRole.FUEL_COMPANY_ADMIN) {
       return this.ordersService.getFuelCompanySummary(start, end);
     }
+    // spec 017 T052/FR-023 (research R5): the operator gets a THIRD shape. Until
+    // now this handler branched two ways over three roles, so a SUPER_ADMIN fell
+    // through to the transport company's summary — `awaitingAssignment` and
+    // `driversOnDuty` computed platform-wide, real numbers answering a
+    // transporter's questions rather than the operator's. The
+    // TRANSPORT_COMPANY_ADMIN branch below is deliberately untouched: FR-075
+    // makes its response byte-for-byte unchanged.
+    if (user.role === UserRole.SUPER_ADMIN) {
+      return this.ordersService.getPlatformSummary(start, end);
+    }
     return this.ordersService.getSummary(start, end);
   }
 
@@ -153,9 +174,31 @@ export class OrdersController {
   async findMine(
     @CurrentUser() user: AuthenticatedUser,
     @Query('status') status?: OrderStatus,
+    // spec 017 T050/FR-016/FR-016a — the operator's bucket filter and
+    // identifier search. Both are role-agnostic: the scoping plugins still
+    // apply, so a fuel company filtering by bucket gets its own orders in that
+    // bucket and nobody else's (asserted by T047, which is an e2e test
+    // precisely because a unit test correctly registers no plugin at all).
+    @Query('bucket') bucket?: string,
+    @Query('orderId') orderId?: string,
     @Query('cursor') cursor?: string,
   ) {
-    const page = await this.ordersService.findForUser(user, { status, cursor });
+    const parsedBucket = parseEnumQuery(OrderStatusBucket, bucket, 'bucket');
+    // A contradictory pair must REFUSE, never return a silently empty page: an
+    // empty page reads as "there are no such orders" when the truth is "that
+    // combination cannot exist".
+    if (parsedBucket && status && !ORDER_STATUS_BUCKETS[parsedBucket].includes(status)) {
+      throw new BadRequestException({
+        error: ErrorCode.ORDER_BUCKET_STATUS_CONFLICT,
+        message: `status ${status} is not part of bucket ${parsedBucket}`,
+      });
+    }
+    const page = await this.ordersService.findForUser(user, {
+      status,
+      bucket: parsedBucket,
+      orderId,
+      cursor,
+    });
     // One query for the whole page's stations, so a list row can name the
     // destination. Without it a client whose order was placed before their
     // station had an address on file sees raw coordinates in the list —
@@ -250,6 +293,22 @@ export class OrdersController {
       // as safety and delivery visibility for the transporter who employs
       // the driver, and widening the audience would change what it is.
       delete base.stopEvents;
+      // spec 017 FR-020: force-complete is now a SUPER_ADMIN capability too,
+      // and its `reason` is free text an operator writes for the platform's own
+      // record — "customer unreachable, closing out", an internal ticket
+      // reference. `statusHistory` is client-readable, so without this the
+      // operator's internal note and the staff member's user id are published
+      // to the customer whose order it is.
+      //
+      // The TRANSITIONS stay, and so does the `manualOverride` flag: that an
+      // order was completed by an administrator rather than by the usual
+      // handover is the customer's business. Who wrote what about them is not.
+      if (Array.isArray(base.statusHistory)) {
+        base.statusHistory = (base.statusHistory as Record<string, unknown>[]).map((entry) => {
+          const { overrideReason: _reason, actorId: _actorId, actorRole: _actorRole, ...rest } = entry;
+          return rest;
+        });
+      }
     }
     // spec 013 T193/FR-073f: the raw array is never exposed to anyone, under any role —
     // narrower than every field above it. The shaped `supplierInvoice` field replaces it.
@@ -354,18 +413,13 @@ export class OrdersController {
 
     const approved = await this.ordersService.approve(order, actor, dto);
 
-    await this.notificationsService.notify({
-      companyId: approved.fuelCompanyId,
-      recipientUserId: approved.clientId,
-      type: NotificationType.ORDER_APPROVED_FINAL_PRICE,
-      orderId: approved._id as never,
-      payload: { finalPrice: approved.finalPrice },
-    });
-
-    if (approved.status === OrderStatus.PENDING_PAYMENT) {
-      return approved.toObject();
-    }
-
+    // The client is NOT told a final price here any more — at approval there
+    // isn't one. The transport company that prices the haul is chosen in the
+    // routing step below, and `RoutingService` notifies the station owner once
+    // it has produced a total they can actually act on.
+    //
+    // Routing now runs for every payment method, DIRECT included: it is what
+    // makes the order priceable, so it can no longer wait behind a payment.
     const { order: routed, candidates } = await this.routingService.routeOrder(
       approved,
       actor,
@@ -393,16 +447,42 @@ export class OrdersController {
     @Body() dto: RouteOrderDto,
   ) {
     const order = await this.ordersService.findById(id);
-    if (order.status !== OrderStatus.AWAITING_ROUTING) {
-      throw new ConflictException('Order must be AWAITING_ROUTING to route it manually');
+    // APPROVED is admitted alongside AWAITING_ROUTING, and it has to be.
+    //
+    // Routing now issues the invoice — it is the first moment the total
+    // includes the haul — and issuance can REFUSE, on a credit limit or a
+    // commission ceiling. That refusal rolls its own transaction back, which
+    // correctly undoes the routing but leaves the order at APPROVED, where
+    // approval had already committed it.
+    //
+    // Without this, such an order is stranded: `:id/approve` will not make the
+    // PENDING_APPROVAL -> APPROVED transition twice, and `:id/route` used to
+    // demand a status it no longer has. Raising the customer's limit would fix
+    // the cause and there would still be no way to move the order. An
+    // APPROVED-but-unrouted order is exactly what this endpoint is for.
+    if (
+      order.status !== OrderStatus.AWAITING_ROUTING &&
+      order.status !== OrderStatus.APPROVED
+    ) {
+      throw new ConflictException(
+        'Order must be AWAITING_ROUTING or APPROVED to route it manually',
+      );
     }
     const { order: routed } = await this.routingService.routeOrder(
       order,
       { actorId: user.userId, actorRole: user.role },
-      OrderStatus.AWAITING_ROUTING,
+      order.status,
       dto.transportCompanyId,
     );
-    if (routed.status !== OrderStatus.ROUTED_TO_TRANSPORT) {
+    // Routing FAILED to resolve a transporter if and only if the order is still
+    // parked awaiting one. Asserting the positive (`=== ROUTED_TO_TRANSPORT`)
+    // was equivalent before and is not now: a successfully routed order carries
+    // straight on to PENDING_PAYMENT, because routing is what prices the haul
+    // and the station owner settles that total before a driver is assigned. Read
+    // the positive way, this guard reported every SUCCESSFUL manual routing as
+    // "that transporter does not serve this region" — a 400 whose message was
+    // the opposite of what had happened.
+    if (routed.status === OrderStatus.AWAITING_ROUTING) {
       throw new BadRequestException(
         'transportCompanyId is not one of the transporters serving this region',
       );
@@ -424,6 +504,36 @@ export class OrdersController {
       { actorId: user.userId, actorRole: user.role },
       { extraSet: { rejectedBy: user.userId, rejectionReason: dto.reason } },
     );
+  }
+
+  /**
+   * The station owner accepts the total routing produced — the second half of
+   * the amended flow, for the orders that have no gateway payment to make.
+   *
+   * A DIRECT order is confirmed by PAYING it (the gateway webhook does the same
+   * transition), so this refuses one rather than offering a second, cheaper way
+   * past the same gate. DEFERRED and CREDIT orders are settled against an
+   * invoice, so their confirmation is this explicit acceptance.
+   *
+   * Refusing the total needs nothing new: `PATCH :id/cancel` below already
+   * admits the CLIENT at PENDING_PAYMENT and already releases every booking.
+   */
+  @Roles(UserRole.CLIENT)
+  @Post(':id/accept')
+  async acceptFinalPrice(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ObjectIdPipe) id: string,
+  ) {
+    const order = await this.ordersService.findOneForUser(user, id);
+    if (String(order.clientId) !== user.userId) {
+      // Not-mine is indistinguishable from absent, as everywhere else here.
+      throw new NotFoundException('Order not found');
+    }
+    const accepted = await this.ordersService.acceptFinalPrice(order, {
+      actorId: user.userId,
+      actorRole: user.role,
+    });
+    return this.toRoleScopedShape(accepted, user);
   }
 
   @Patch(':id/cancel')
@@ -517,8 +627,23 @@ export class OrdersController {
    * against the assigned warehouse (FR-030a), which is why `driverLocation`
    * is on the DTO and why this route can answer NOT_AT_WAREHOUSE.
    */
+  /**
+   * **Deliberately NOT throttled.** This route was `@Throttle({ limit: 5, ttl:
+   * 15 min })`, which counted every outcome — including `LOCATION_REQUIRED`
+   * (where nothing about the vehicle is evaluated at all) and
+   * `NOT_AT_WAREHOUSE`, where the driver presented the CORRECT card and only
+   * the geofence refused. A driver approaching a depot while their GPS settles,
+   * or standing at the gate rather than inside the fence, could burn the budget
+   * in a minute and then be locked out of starting work for fifteen — holding
+   * the right card, at the right depot, with nothing they could do about it.
+   *
+   * The limit existed to stop credential guessing, and it is a poor fit for
+   * that here: the caller is already an authenticated DRIVER who is already
+   * assigned to THIS order, the QR token is 32 random characters, and a wrong
+   * card is refused outright and recorded as a `VehicleVerification` either
+   * way. Refusals remain auditable; they are simply no longer rationed.
+   */
   @Roles(UserRole.DRIVER)
-  @Throttle({ default: { limit: 5, ttl: 15 * 60_000 } })
   @Post(':id/verify-vehicle')
   async verifyVehicle(
     @CurrentUser() user: AuthenticatedUser,
@@ -833,7 +958,10 @@ export class OrdersController {
     return { score: rating.score, review: rating.review ?? null };
   }
 
-  @Roles(UserRole.FUEL_COMPANY_ADMIN)
+  // spec 017 T054/FR-020: SUPER_ADMIN joins FUEL_COMPANY_ADMIN. The permitted
+  // stages are unchanged — this is a one-role widening, not a new capability
+  // (research R7).
+  @Roles(UserRole.FUEL_COMPANY_ADMIN, UserRole.SUPER_ADMIN)
   @Patch(':id/force-complete')
   async forceComplete(
     @CurrentUser() user: AuthenticatedUser,
@@ -841,17 +969,13 @@ export class OrdersController {
     @Body() dto: ForceCompleteOrderDto,
   ) {
     const order = await this.ordersService.findById(id);
-    // spec 008 FR-046e: LOADING gained its own force-complete edge, mirroring
-    // IN_TRANSIT's — an operator can still short-circuit a delivery stuck at
-    // the depot (e.g. a failed loading confirmation) exactly as they already
-    // could from further along the flow.
-    if (
-      order.status !== OrderStatus.LOADING &&
-      order.status !== OrderStatus.IN_TRANSIT &&
-      order.status !== OrderStatus.UNLOADING
-    ) {
+    // The check and the refusal message now read the SAME constant. They were
+    // three inline comparisons and a hand-written prose list of the identical
+    // three stages, which could drift apart with nothing failing
+    // (Constitution I).
+    if (!isForceCompletable(order.status)) {
       throw new ConflictException(
-        'Force-complete only allowed from LOADING, IN_TRANSIT or UNLOADING',
+        `Force-complete only allowed from ${FORCE_COMPLETABLE_STATUSES.join(', ')}`,
       );
     }
     return this.ordersService.forceComplete(

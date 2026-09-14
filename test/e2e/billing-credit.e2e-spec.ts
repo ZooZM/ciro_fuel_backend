@@ -83,7 +83,11 @@ describe('Billing — credit limit (spec 004 US5)', () => {
     const server = app.getHttpServer();
     const client = await createClientWithCreditLimit(300);
 
-    // 200L * 2.5 SAR/L = 500 SAR, over the 300 SAR limit.
+    // 200L * 2.5 SAR/L = 500 of fuel, + 1% service fee = 505, + 30 haul = 535,
+    // + 15% VAT = 615.25 — over the 300 limit. The service fee and the VAT are
+    // new here only because an order created without a quote token used to skip
+    // both; the credit check has always read `finalPrice`, so it now reads the
+    // same figure the invoice will carry.
     const createRes = await createCreditOrder(client.token, 200);
 
     const approveRes = await request(server)
@@ -92,7 +96,7 @@ describe('Billing — credit limit (spec 004 US5)', () => {
       .send({})
       .expect(400);
     expect(approveRes.body.message).toMatch(/credit/i);
-    expect(approveRes.body.message).toMatch(/500/);
+    expect(approveRes.body.message).toMatch(/615\.25/);
     expect(approveRes.body.message).toMatch(/300/);
 
     // Refused cleanly — order never moved, no invoice exists (FR-020/FR-025).
@@ -100,7 +104,15 @@ describe('Billing — credit limit (spec 004 US5)', () => {
       .get(`/api/v1/orders/${createRes.body._id}`)
       .set('Authorization', `Bearer ${admin.token}`)
       .expect(200);
-    expect(stillPending.body.status).toBe(OrderStatus.PENDING_APPROVAL);
+    // APPROVED, not PENDING_APPROVAL. The credit check lives in invoice
+    // issuance, and the invoice is now issued at ROUTING — the first moment the
+    // total includes the haul. So approval itself succeeds, and the refusal
+    // arrives one step later and rolls the routing back with it: the order is
+    // left approved, un-routed, uninvoiced and recoverable (raise the limit,
+    // then PATCH :id/route), never committed to a transporter it cannot bill.
+    expect(stillPending.body.status).toBe(OrderStatus.APPROVED);
+    expect(stillPending.body.transportCompanyId).toBeFalsy();
+    expect(stillPending.body.invoiceId).toBeFalsy();
     expect(stillPending.body.invoiceId).toBeFalsy();
   });
 
@@ -109,7 +121,8 @@ describe('Billing — credit limit (spec 004 US5)', () => {
     const server = app.getHttpServer();
     const client = await createClientWithCreditLimit(300);
 
-    // 80L * 2.5 = 200 SAR each; both individually fit under 300, but not together.
+    // 80L * 2.5 = 200 of fuel, + 1% service = 202, + 30 haul = 232, + 15% VAT
+    // = 266.80 each; both individually fit under 300, but not together.
     const order1 = await createCreditOrder(client.token, 80);
     const order2 = await createCreditOrder(client.token, 80);
 
@@ -118,9 +131,10 @@ describe('Billing — credit limit (spec 004 US5)', () => {
       .set('Authorization', `Bearer ${admin.token}`)
       .send({})
       .expect(200);
-    expect(approve1.body.status).toBe(OrderStatus.ROUTED_TO_TRANSPORT);
+    // Routed AND priced, then handed back to the station owner to settle.
+    expect(approve1.body.status).toBe(OrderStatus.PENDING_PAYMENT);
 
-    // The second consumes what's left (300 - 200 = 100) and is refused.
+    // The second has only 300 - 266.80 = 33.20 left to draw on, and is refused.
     await request(server)
       .patch(`/api/v1/orders/${order2.body._id}/approve`)
       .set('Authorization', `Bearer ${admin.token}`)
@@ -131,7 +145,9 @@ describe('Billing — credit limit (spec 004 US5)', () => {
       .get(`/api/v1/orders/${order2.body._id}`)
       .set('Authorization', `Bearer ${admin.token}`)
       .expect(200);
-    expect(order2After.body.status).toBe(OrderStatus.PENDING_APPROVAL);
+    // Same as above: approved, then refused at routing, with routing undone.
+    expect(order2After.body.status).toBe(OrderStatus.APPROVED);
+    expect(order2After.body.transportCompanyId).toBeFalsy();
   });
 
   it('SC-004: two concurrent approvals racing the same credit limit resolve to exactly one success', async () => {
@@ -139,8 +155,8 @@ describe('Billing — credit limit (spec 004 US5)', () => {
     const server = app.getHttpServer();
     const client = await createClientWithCreditLimit(300);
 
-    const order1 = await createCreditOrder(client.token, 80); // 200 SAR
-    const order2 = await createCreditOrder(client.token, 80); // 200 SAR — together, 400 > 300
+    const order1 = await createCreditOrder(client.token, 80); // 266.80 SAR
+    const order2 = await createCreditOrder(client.token, 80); // 266.80 SAR — together, 533.60 > 300
 
     const [approve1, approve2] = await Promise.all([
       request(server)
@@ -168,7 +184,7 @@ describe('Billing — credit limit (spec 004 US5)', () => {
         inv.clientId === client.id && inv.method === 'CREDIT' && inv.state === 'ISSUED',
     );
     expect(thisClientsIssuedCredit).toHaveLength(1);
-    expect(thisClientsIssuedCredit[0].amount).toBeCloseTo(200, 2);
+    expect(thisClientsIssuedCredit[0].amount).toBeCloseTo(266.8, 2);
   });
 
   it(
@@ -177,38 +193,48 @@ describe('Billing — credit limit (spec 004 US5)', () => {
     async () => {
       const { admin } = fixtures.companyA;
       const server = app.getHttpServer();
-      const client = await createClientWithCreditLimit(300);
+      // 400, not 300: one 100 L CREDIT order is 250 of fuel + 1% service + the
+      // 30 haul + 15% VAT = 324.88, which a 300 limit no longer admits at all.
+      // The limit is sized so the FIRST order fits and the second does not,
+      // which is what this test is actually about.
+      const client = await createClientWithCreditLimit(400);
 
       const beforeOrder = await request(server)
         .get('/api/v1/users/me/credit')
         .set('Authorization', `Bearer ${client.token}`)
         .expect(200);
       expect(beforeOrder.body).toEqual({
-        creditLimit: 300,
+        creditLimit: 400,
         consumed: 0,
-        available: 300,
+        available: 400,
       });
 
-      // Consumes 250 of the 300 limit (100L DIESEL @ 2.5/L).
+      // The facility is measured against what the customer will actually be
+      // billed — so `consumed` is asserted against the order's OWN `finalPrice`
+      // rather than a literal restated here. A literal is a second calculation
+      // that can drift from the first; this is the agreement the test claims to
+      // be checking.
       const createRes = await createCreditOrder(client.token, 100);
-      await request(server)
+      const approved = await request(server)
         .patch(`/api/v1/orders/${createRes.body._id}/approve`)
         .set('Authorization', `Bearer ${admin.token}`)
         .send({})
         .expect(200);
+      const billed: number = approved.body.finalPrice;
+      expect(billed).toBeGreaterThan(0);
 
       const afterApproval = await request(server)
         .get('/api/v1/users/me/credit')
         .set('Authorization', `Bearer ${client.token}`)
         .expect(200);
-      expect(afterApproval.body.creditLimit).toBe(300);
-      expect(afterApproval.body.available).toBeCloseTo(50, 2);
-      expect(afterApproval.body.consumed).toBeCloseTo(250, 2);
+      expect(afterApproval.body.creditLimit).toBe(400);
+      expect(afterApproval.body.consumed).toBeCloseTo(billed, 2);
+      expect(afterApproval.body.available).toBeCloseTo(400 - billed, 2);
 
       // Exactly the figure a second CREDIT order's approval would itself
       // reject against — the same derivation, not a second calculation
       // that could drift from it.
-      const overLimitOrder = await createCreditOrder(client.token, 100); // 250 > 50 available
+      const overLimitOrder = await createCreditOrder(client.token, 100);
       const refusedApproval = await request(server)
         .patch(`/api/v1/orders/${overLimitOrder.body._id}/approve`)
         .set('Authorization', `Bearer ${admin.token}`)

@@ -268,14 +268,39 @@ dashboard, but it depends on Story 4 having assigned a driver.
 
 **Billing**
 
-- **FR-020**: System MUST issue an invoice for every order **at approval**, when the Fuel
-  Company has set the final price, recording that final amount, the payer, the method, and the
-  lifecycle state. No invoice is issued, and no payment is collected, before approval.
-- **FR-020a**: Under direct payment the order MUST remain in `PENDING_PAYMENT` until its
-  invoice is settled, and MUST NOT be routed to a Transportation Company before settlement.
-- **FR-020b**: The existing payment window and its retry/timeout accounting MUST apply to
-  direct payment only. Deferred and credit orders proceed to routing as soon as their invoice
-  is issued and MUST NOT be expired or cancelled for non-settlement.
+> **Amended — the billing requirements below were reversed in order.** As
+> originally written, the invoice was issued at approval and a direct order paid
+> before it was routed. That could not survive the rule that **the delivery leg
+> is priced by the transport company that performs it**: until routing chooses
+> that company, nobody can say what the haul costs, so an invoice issued at
+> approval billed the fuel line alone and a customer was asked to pay a total
+> that excluded delivery. Routing now comes first and produces the figure; the
+> station owner reviews and settles it afterwards. FR-020, FR-020a, FR-020b,
+> FR-024 and FR-025 below state the amended order. Everything downstream of
+> settlement — assignment, loading, transit, handover — is unchanged.
+
+- **FR-020**: System MUST issue an invoice for every order **at routing**, once a Transportation
+  Company has been resolved and the delivery leg it charges for is therefore priced, recording
+  the final amount, the payer, the method, and the lifecycle state. No invoice is issued, and no
+  payment is collected, before the order is routed. An invoice MUST be issued exactly once and
+  MUST carry the complete total, never the fuel line alone.
+- **FR-020a**: An order MUST be routed to a Transportation Company **before** payment is
+  requested, because routing is what makes the total knowable. Once routed and priced, the order
+  MUST return to the station owner in `PENDING_PAYMENT` and MUST NOT be assigned a driver until
+  they settle it — under direct payment by paying the invoice, and under deferred or credit
+  payment by explicitly accepting the total. Refusing the total is the client's existing
+  cancellation; the system MUST NOT provide a separate refusal.
+- **FR-020a-i**: Routing, pricing and invoice issuance MUST succeed or fail together. An invoice
+  refused on a credit limit or a commission ceiling MUST undo the routing that produced the
+  figure it refused, leaving the order approved, un-routed, uninvoiced and routable again — never
+  committed to a Transportation Company the platform has declined to bill. That order MUST remain
+  recoverable once the cause is cleared, without needing to be approved a second time.
+- **FR-020b**: The payment window and its retry/timeout accounting MUST apply to direct payment
+  only, and a payment deadline MUST be recorded only where one is enforced. Deferred and credit
+  orders await the station owner's acceptance with **no deadline at all** and MUST NOT be
+  expired or cancelled for non-acceptance: they are settled against an invoice rather than a
+  gateway, and cancelling one because nobody opened the application would invent a failure the
+  platform does not otherwise have.
 - **FR-021**: System MUST support three payment methods — direct (client pays), deferred
   (Transportation Company pays on the client's behalf), and credit limit.
 - **FR-022**: A deferred invoice MUST name the Transportation Company as its single payer, be
@@ -283,13 +308,16 @@ dashboard, but it depends on Story 4 having assigned a driver.
   MUST NOT create or track any reimbursement between transporter and client — that is settled
   outside the platform.
 - **FR-023**: A Fuel Company MUST be able to set a credit limit per client.
-- **FR-024**: Issuing a credit invoice at approval MUST reduce the client's available credit by
+- **FR-024**: Issuing a credit invoice at routing MUST reduce the client's available credit by
   its amount; settling it MUST restore that amount. Placing an order MUST NOT reserve credit.
+  The amount consumed is the complete total including the delivery leg, which is what the client
+  will actually be billed.
 - **FR-024a**: Available credit MUST be derived as the credit limit minus the total of
   outstanding issued credit invoices, never held as an independently mutated counter.
-- **FR-025**: Approval MUST be refused when a credit order's final price exceeds the client's
+- **FR-025**: Routing MUST be refused when a credit order's final price exceeds the client's
   available credit at that moment, naming the shortfall; no invoice is issued and no credit is
-  consumed by a refused approval.
+  consumed by a refused routing. The check runs against the complete total including the delivery
+  leg — it could not run at approval, where that figure does not yet exist (FR-020a).
 - **FR-026**: Payment confirmation MUST remain provider-driven and idempotent: repeated
   notifications for the same payment MUST settle an invoice exactly once.
 - **FR-027**: Credit and payment balances MUST be updated atomically with the invoice state, so

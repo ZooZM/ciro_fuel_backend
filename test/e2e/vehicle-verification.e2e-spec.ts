@@ -8,8 +8,7 @@ import {
   DEFAULT_WAREHOUSE_LOCATION,
   resetFixtureDispatchState,
   seedTwoCompanies,
-  TwoCompanyFixture,
-} from '../utils/fixtures';
+  TwoCompanyFixture, settleClientReview } from '../utils/fixtures';
 import { AuthService } from '../../src/modules/auth/auth.service';
 import { TrucksService } from '../../src/modules/trucks/trucks.service';
 import { OrderStatus } from '../../src/common/enums/order-status.enum';
@@ -115,6 +114,7 @@ describe('Vehicle verification — the departure gate (spec 008 US3)', () => {
       .send(rawBody)
       .expect(201);
 
+    await settleClientReview(app, orderId);
     await request(server)
       .post(`/api/v1/dispatch/orders/${orderId}/assign`)
       .set('Authorization', `Bearer ${transportAdmin.token}`)
@@ -297,19 +297,41 @@ describe('Vehicle verification — the departure gate (spec 008 US3)', () => {
     expect((await readOrder(orderId)).status).toBe(OrderStatus.IN_TRANSIT);
   });
 
-  it('throttles the 6th attempt inside the window (FR-023)', async () => {
+  /**
+   * FR-023's 5-per-15-minute lockout has been REMOVED from this route, and this
+   * test now pins its absence.
+   *
+   * It counted every outcome, not just a wrong credential — `LOCATION_REQUIRED`
+   * (where nothing about the vehicle is evaluated at all) and `NOT_AT_WAREHOUSE`
+   * (where the driver presented the CORRECT card and only the geofence refused)
+   * both consumed attempts. A driver approaching a depot while their GPS
+   * settled, or standing at the gate rather than inside the fence, could spend
+   * the budget in a minute and then be unable to start work for fifteen —
+   * holding the right card, at the right depot, with nothing they could do.
+   *
+   * The limit was aimed at credential guessing and fits that poorly here: the
+   * caller is already an authenticated DRIVER already assigned to THIS order,
+   * the QR token is 32 random characters, and every refusal is still recorded
+   * as a `VehicleVerification` either way. Refusals remain auditable; they are
+   * simply no longer rationed.
+   */
+  it('does NOT lock a driver out after repeated refusals (FR-023 withdrawn)', async () => {
     const orderId = await assignedOrder();
 
-    // Five refusals, each answered on its own merits…
-    for (let i = 0; i < 5; i++) {
+    // Well past the old 5-attempt window, each answered on its own merits.
+    for (let i = 0; i < 8; i++) {
       await verify(orderId, `CARD-WRONG-${i}`).expect(403);
     }
-    // …and the sixth on the rate limiter's, not the credential's.
-    await verify(orderId, fixtures.companyA.truck.nfcCardUid).expect(429);
 
-    // Crucially the delivery is still startable once the window passes —
-    // throttling must not consume the gate itself.
-    expect((await readOrder(orderId)).status).toBe(OrderStatus.ASSIGNED_TO_DRIVER);
+    // The next correct read still works — the driver is never shut out of
+    // starting their own delivery.
+    await verify(orderId, fixtures.companyA.truck.nfcCardUid).expect(201);
+    expect((await readOrder(orderId)).status).toBe(OrderStatus.LOADING);
+
+    // Every refusal is still on the record: removing the lockout removed a
+    // rationing rule, not the audit trail.
+    const order = await readOrder(orderId);
+    expect(order.verifications.filter((v: { matched: boolean }) => !v.matched).length).toBe(8);
   });
 
   // --- T101 -----------------------------------------------------------

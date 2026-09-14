@@ -7,8 +7,7 @@ import {
   seedTwoCompanies,
   TwoCompanyFixture,
   assignAndDepart,
-  resetFixtureDispatchState,
-} from '../utils/fixtures';
+  resetFixtureDispatchState, settleClientReview } from '../utils/fixtures';
 import { OrderStatus } from '../../src/common/enums/order-status.enum';
 import { User, UserDocument } from '../../src/modules/users/schemas/user.schema';
 
@@ -58,7 +57,10 @@ describe('Order visibility — driver summary & ETA (spec 004 US6)', () => {
       .set('Authorization', `Bearer ${admin.token}`)
       .send({})
       .expect(200);
-    expect(approveRes.body.status).toBe(OrderStatus.ROUTED_TO_TRANSPORT);
+    // Routing now prices the haul and hands the order back to the station
+    // owner, so approval lands on PENDING_PAYMENT rather than going straight
+    // to the transporter; the settlement step below is what releases it.
+    expect(approveRes.body.status).toBe(OrderStatus.PENDING_PAYMENT);
 
     // Before assignment: no driver yet, so no summary and no ETA (never fabricated).
     const beforeAssign = await request(server)
@@ -143,6 +145,7 @@ describe('Order visibility — driver summary & ETA (spec 004 US6)', () => {
       .set('Authorization', `Bearer ${admin.token}`)
       .send({})
       .expect(200);
+    await settleClientReview(app, createRes.body._id);
     await request(server)
       .post(`/api/v1/dispatch/orders/${createRes.body._id}/assign`)
       .set('Authorization', `Bearer ${fixtures.companyA.transportAdmin.token}`)

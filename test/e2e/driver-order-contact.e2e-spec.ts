@@ -2,7 +2,7 @@ import request from 'supertest';
 import { createHmac } from 'node:crypto';
 import { INestApplication } from '@nestjs/common';
 import { createTestApp, TestAppContext } from '../utils/test-app.factory';
-import { seedTwoCompanies, TwoCompanyFixture, resetFixtureDispatchState } from '../utils/fixtures';
+import { seedTwoCompanies, TwoCompanyFixture, resetFixtureDispatchState, settleClientReview } from '../utils/fixtures';
 
 jest.setTimeout(120_000);
 
@@ -76,6 +76,7 @@ describe('Driver order — customer contact mirror (spec 007 FR-003a/b)', () => 
       .set('X-Signature', signature)
       .send(rawBody)
       .expect(201);
+    await settleClientReview(app, orderId);
     await request(server)
       .post(`/api/v1/dispatch/orders/${orderId}/assign`)
       .set('Authorization', `Bearer ${company.transportAdmin.token}`)

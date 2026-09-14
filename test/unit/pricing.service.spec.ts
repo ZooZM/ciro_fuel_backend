@@ -119,8 +119,16 @@ describe('PricingService', () => {
         );
         const { breakdown } = await service.quote('company-1', FuelType.DIESEL, c.quantity, TARGET);
 
+        // `deliveryFee` is ABSENT from a quote now — the haul is priced by the
+        // transport company routing later picks, so at quote time there is no
+        // figure and the key is omitted rather than zeroed. The sum rule is
+        // unchanged; it simply has one fewer component to sum here.
+        expect(breakdown.deliveryFee).toBeUndefined();
         const sum =
-          breakdown.fuelLineTotal + breakdown.deliveryFee + breakdown.serviceFee + breakdown.tax;
+          breakdown.fuelLineTotal +
+          (breakdown.deliveryFee ?? 0) +
+          breakdown.serviceFee +
+          breakdown.tax;
         // Exact equality, not toBeCloseTo — this is the whole point of
         // research R2's "round each component, then sum" rule.
         expect(Math.round(sum * 100)).toBe(Math.round(breakdown.total * 100));
@@ -136,6 +144,10 @@ describe('PricingService', () => {
       // The assertion above this one rounds BOTH sides before comparing,
       // so it cannot see this class of defect. This one does not round
       // either side.
+      // Exercised through `priceWithTransport`, because that is now the only
+      // path on which all FOUR components exist — a quote carries no transport
+      // line at all, and summing three would no longer reproduce the defect
+      // this test was written for.
       const service = new PricingService(
         buildCompaniesService({
           unitPrice: 2.18,
@@ -146,7 +158,15 @@ describe('PricingService', () => {
         buildTransportPricing(),
         buildConfig(),
       );
-      const { breakdown } = await service.quote('company-1', FuelType.PETROL_91, 5000, TARGET);
+      const breakdown = await service.priceWithTransport(
+        {
+          unitPrice: 2.18,
+          serviceFeePercent: 2.5,
+          taxRatePercent: 15,
+        } as never,
+        5000,
+        50,
+      );
 
       expect(breakdown.total).toBe(12905.88);
 
@@ -155,7 +175,7 @@ describe('PricingService', () => {
       expect(breakdown.total).toBe(Number(breakdown.total.toFixed(2)));
     });
 
-    it('derives fuelLineTotal = unitPrice × quantity, deliveryFee = flat, serviceFee = percent of fuel line, tax = percent of (fuel+delivery+service)', async () => {
+    it('derives fuelLineTotal = unitPrice × quantity, serviceFee = percent of fuel line, tax = percent of (fuel+service), with NO transport line', async () => {
       const service = new PricingService(
         buildCompaniesService({
           unitPrice: 2,
@@ -169,13 +189,28 @@ describe('PricingService', () => {
       const { breakdown } = await service.quote('company-1', FuelType.DIESEL, 100, TARGET);
 
       expect(breakdown.fuelLineTotal).toBe(200); // 2 * 100
-      expect(breakdown.deliveryFee).toBe(10);
+      // The fuel company's own configured `deliveryFee` of 10 is NOT used: the
+      // haul is priced by the transport company that performs it, and none has
+      // been chosen yet. The tax base is fuel + service alone.
+      expect(breakdown.deliveryFee).toBeUndefined();
       expect(breakdown.serviceFee).toBe(20); // 10% of 200
-      expect(breakdown.tax).toBe(23); // 10% of (200 + 10 + 20)
-      expect(breakdown.total).toBe(253);
+      expect(breakdown.tax).toBe(22); // 10% of (200 + 20)
+      expect(breakdown.total).toBe(242);
     });
 
-    it('an inapplicable component is disclosed as zero, never omitted (FR-011d)', async () => {
+    /**
+     * FR-011d — "an inapplicable component is disclosed as zero, never omitted"
+     * — still holds, and now has exactly one documented exception.
+     *
+     * The rule exists so a fee that APPLIES and happens to be zero cannot be
+     * hidden from the client. `deliveryFee` before routing is a different fact:
+     * not "zero", but "not yet knowable", because the company that sets it has
+     * not been chosen. Disclosing that as `0` would state that delivery is
+     * free. Absence is the honest answer, and it is what makes the station
+     * owner's transport field render empty rather than as a figure they would
+     * reasonably believe.
+     */
+    it('a zero component is still disclosed as zero, never omitted (FR-011d)', async () => {
       const service = new PricingService(
         buildCompaniesService({ deliveryFee: 0, serviceFeePercent: 0, taxRatePercent: 0 }),
         buildTransportPricing(),
@@ -183,12 +218,24 @@ describe('PricingService', () => {
       );
       const { breakdown } = await service.quote('company-1', FuelType.DIESEL, 100, TARGET);
 
-      expect(breakdown.deliveryFee).toBe(0);
       expect(breakdown.serviceFee).toBe(0);
       expect(breakdown.tax).toBe(0);
-      expect(breakdown).toHaveProperty('deliveryFee');
       expect(breakdown).toHaveProperty('serviceFee');
       expect(breakdown).toHaveProperty('tax');
+    });
+
+    it('omits the transport line entirely until a transporter is assigned — absent, not zero', async () => {
+      const service = new PricingService(
+        buildCompaniesService({ unitPrice: 2, deliveryFee: 10, serviceFeePercent: 10, taxRatePercent: 10 }),
+        buildTransportPricing(),
+        buildConfig(),
+      );
+      const { breakdown } = await service.quote('company-1', FuelType.DIESEL, 100, TARGET);
+
+      // The distinction the station owner's screen depends on: an empty field,
+      // not a zero they would read as "delivery is included".
+      expect(breakdown).not.toHaveProperty('deliveryFee');
+      expect(Object.keys(breakdown)).not.toContain('deliveryFee');
     });
 
     it('rounds half-up to 2dp per component before summing', async () => {

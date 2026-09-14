@@ -7,8 +7,7 @@ import {
   DEFAULT_WAREHOUSE_LOCATION,
   resetFixtureDispatchState,
   seedTwoCompanies,
-  TwoCompanyFixture,
-} from '../utils/fixtures';
+  TwoCompanyFixture, settleClientReview } from '../utils/fixtures';
 import { getModelToken } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import {
@@ -115,6 +114,7 @@ describe('Warehouse loading (spec 008 US4)', () => {
       .send(rawBody)
       .expect(201);
 
+    await settleClientReview(app, orderId);
     await request(server)
       .post(`/api/v1/dispatch/orders/${orderId}/assign`)
       .set('Authorization', `Bearer ${transportAdmin.token}`)
