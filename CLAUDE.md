@@ -1,3 +1,57 @@
+# ACTIVE: cross-device live-tracking test (Mac = DRIVER, Windows = CLIENT)
+
+Operational handoff, not background. Delete when the test is over. The mobile
+repo's own `CLAUDE.md` carries the driver-side half — the two must agree.
+
+**Division of work.** The Mac session runs the mobile app as the **DRIVER** on a
+real device/simulator and drives a real route. This machine is the **CLIENT**
+and the backend: it prepares the order, holds the customer's socket, and is the
+only place the result is actually visible.
+
+**The backend is exposed to the Mac over ngrok (HTTPS).** It listens on
+`0.0.0.0:3000` inside Docker (`docker compose up -d`); the LAN address here is
+`192.168.2.2`. The live tunnel is
+`https://firstly-perforative-jaylah.ngrok-free.dev` — which is also the built-in
+default in the mobile app's `Env`, so the Mac needs no `--dart-define` unless
+the tunnel is restarted (a free ngrok host changes each time). Verify with
+`curl https://<host>/api/v1/health/ready` before debugging anything device-side;
+a dead tunnel and a broken client are indistinguishable from the phone.
+
+**NEVER SIGN IN AS THE DRIVER FROM THIS MACHINE WHILE THE TEST RUNS.** A driver
+holds exactly one session (spec 006): a second sign-in displaces the first,
+pushes `session:revoked`, and the phone signs itself out mid-drive with
+*"تم تسجيل الدخول من جهاز آخر"*, stopping `LocationStreamService`. This has
+already happened once — a token-refresh helper that re-authenticated every
+persona in a loop killed a live tracking run and the failure looked like "the
+phone stopped sending". Any helper here must refresh **only** the client and
+admin tokens, which are multi-session. Driver tokens are the Mac's alone.
+
+**This machine's job, in order:**
+1. Seed/confirm actors (`npm run seed:dashboard` — suffix is printed; the
+   current set is `45453736`).
+2. Create an order as the CLIENT, approve it as the fuel admin, accept the
+   final price as the CLIENT, assign a driver as the transport admin.
+3. Drive it to `IN_TRANSIT` over REST — departure verification, loading
+   verification at the warehouse geofence, `confirm-loading`. **The Mac cannot
+   do this**: a simulator has neither NFC nor a usable camera, and the driver's
+   credential is a physical card or a QR token.
+4. Open a CLIENT socket on `/tracking`, `order:watch` the order, and record
+   every `order:location` / `order:status`, alongside polling
+   `GET /orders/:id` for the persisted `driverLocation` / `driverLocationAt`.
+   A position the customer sees but the platform never stored (or the reverse)
+   is the interesting failure, so watch both.
+
+**Read the result against the emit gate, not against wall-clock expectations.**
+The app sends a fix only when it is > 50 m from the last accepted one or 3
+minutes have elapsed, never more than once per 5 s, and the server enforces the
+same policy again. A stationary truck reporting once every 3 minutes is
+correct; a sub-50 m move producing nothing is correct.
+
+**Establish a control first.** Before the phone connects, confirm the customer
+socket receives **zero** positions and note the timestamp of whatever stale
+`driverLocationAt` the seed left behind. Without that, a position arriving later
+cannot be attributed to the phone.
+
 <!-- SPECKIT START -->
 Previously implemented feature: `specs/017-super-admin-dashboard-backend/plan.md`
 (finish the platform operator's dashboard surface — connect every remaining SUPER_ADMIN screen to
