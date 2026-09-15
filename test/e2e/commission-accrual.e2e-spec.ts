@@ -131,16 +131,18 @@ describe('Commission accrual matches the rate in force, including across a rate 
       .set('Authorization', `Bearer ${admin.token}`)
       .expect(200);
 
-    // DEFERRED — no credit-limit setup needed. DIESEL @ 2.5/L (fixture) * 100L
-    // = 250.00 of fuel + 30.00 haul = 280.00 -> 0.05 per unit of invoice value
-    // = 14.00. The order amount now includes the transporter's 30 SAR haul, so the platform's cut is taken on fuel + delivery.
-    await createAndApproveOrder(client.token, admin.token, 'DEFERRED', 100);
+    // PER_UNIT is 'rate x invoice value' (computeAmount), so like PERCENTAGE it
+    // scales with the whole total — fuel + service fee + haul + VAT. Derived from
+    // the order's own finalPrice rather than restated, for the same reason as the
+    // PERCENTAGE case above: a literal here silently drifts when any component moves.
+    const perUnitOrder = await createAndApproveOrder(client.token, admin.token, 'DEFERRED', 100);
+    const expectedPerUnit = Math.round(perUnitOrder.finalPrice * 0.05 * 100) / 100;
 
     const after = await request(server)
       .get('/api/v1/billing/balances/me')
       .set('Authorization', `Bearer ${admin.token}`)
       .expect(200);
-    expect(after.body.commissionAccrued).toBeCloseTo(before.body.commissionAccrued + 14, 2);
+    expect(after.body.commissionAccrued).toBeCloseTo(before.body.commissionAccrued + expectedPerUnit, 2);
 
     // A FUEL_COMPANY_ADMIN sees the terms read-only — no PUT access at all (FR-056).
     await request(server)

@@ -234,7 +234,7 @@ describe('Platform & company onboarding (US5)', () => {
     const assignRes = await request(server)
       .post(`/api/v1/dispatch/orders/${orderRes.body._id}/assign`)
       .set('Authorization', `Bearer ${transportAdminToken}`)
-      .send({ driverId: driverRes.body._id, truckId: truckRes.body.id, tankId: tankRes.body._id })
+      .send({ driverId: driverRes.body._id, truckId: truckRes.body.id, tankId: tankRes.body.id })
       .expect(201);
     expect(assignRes.body.assigned).toBe(true);
     expect(assignRes.body.driverId).toBe(driverRes.body._id);

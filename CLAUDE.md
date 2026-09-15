@@ -17,14 +17,29 @@ the tunnel is restarted (a free ngrok host changes each time). Verify with
 `curl https://<host>/api/v1/health/ready` before debugging anything device-side;
 a dead tunnel and a broken client are indistinguishable from the phone.
 
-**NEVER SIGN IN AS THE DRIVER FROM THIS MACHINE WHILE THE TEST RUNS.** A driver
-holds exactly one session (spec 006): a second sign-in displaces the first,
-pushes `session:revoked`, and the phone signs itself out mid-drive with
-*"تم تسجيل الدخول من جهاز آخر"*, stopping `LocationStreamService`. This has
-already happened once — a token-refresh helper that re-authenticated every
-persona in a loop killed a live tracking run and the failure looked like "the
-phone stopped sending". Any helper here must refresh **only** the client and
-admin tokens, which are multi-session. Driver tokens are the Mac's alone.
+**SESSION RULE — GOT THIS WRONG ONCE, GET IT RIGHT.** `SESSION_CAPPED_ROLES`
+(`src/common/constants/session-capped-roles.ts`) is the authority: only
+`SUPER_ADMIN`, `FUEL_COMPANY_ADMIN` and `TRANSPORT_COMPANY_ADMIN` hold multiple
+concurrent sessions (spec 015). **DRIVER and CLIENT are single-session**, still
+on spec 006's `sessionGeneration` counter — CLIENT is *not* multi-session, which
+an earlier version of this note claimed.
+
+Consequences while the test runs:
+
+- **Never sign in as the DRIVER from this machine.** It displaces the Mac's
+  phone mid-drive (`session:revoked { cause: SIGNED_IN_ELSEWHERE }` →
+  *"تم تسجيل الدخول من جهاز آخر"* → `LocationStreamService` stops). A
+  token-refresh helper that looped over every persona already did this once.
+- **Exactly ONE client login may exist at a time, anywhere.** Two watcher
+  scripts here each logging in as the client revoke each other, and the symptom
+  is silent: positions keep being STORED while the surviving socket is the only
+  one still pushed to. That looked like a broken server-side fan-out for a
+  while; it was two of my own sockets fighting over one session.
+- Therefore: one long-lived client session, reused. Do not spawn a second
+  client login to "check" something — probe with the session you already hold.
+- Any socket watcher must set `reconnection: true` AND log its own
+  disconnects. A monitor that cannot tell its own death from the subject's is
+  worse than no monitor.
 
 **This machine's job, in order:**
 1. Seed/confirm actors (`npm run seed:dashboard` — suffix is printed; the
