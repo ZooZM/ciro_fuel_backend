@@ -206,6 +206,24 @@ export class OrderStateService {
       if (updated.driverId) {
         this.realtimeGateway.emitToUser(String(updated.driverId), 'order:status', payload);
       }
+      // The CLIENT needs the same third path, and for a closely related
+      // reason. They are not BANNED from the order room like the driver is —
+      // `order:watch` simply refuses it with NOT_TRACKABLE until the order
+      // reaches IN_TRANSIT, because that room carries the live position feed
+      // and there is no position to feed before then. The effect is the same:
+      // across PENDING_APPROVAL -> PENDING_PAYMENT -> ROUTED_TO_TRANSPORT ->
+      // ASSIGNED_TO_DRIVER -> LOADING the customer had no live path at all,
+      // and no notification covered those stages either (the only two client
+      // notifications are ORDER_APPROVED_FINAL_PRICE and OTP_ISSUED). Their
+      // own order screen therefore sat on whatever it had loaded and could
+      // only be corrected by closing and reopening it.
+      //
+      // Same payload, same event name, same one handler — and nothing here is
+      // disclosed that `GET /orders/:id` would not already return to the
+      // order's own client.
+      if (updated.clientId) {
+        this.realtimeGateway.emitToUser(String(updated.clientId), 'order:status', payload);
+      }
       return updated;
     }
 
