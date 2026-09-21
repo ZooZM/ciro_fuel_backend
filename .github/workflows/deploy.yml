@@ -124,4 +124,4 @@ jobs:
 
       - name: Report
         if: success()
-        run: echo "Deployed ${{ needs.build.outputs.tag }} — https://api.ciro.app/api/v1/health/live"
+        run: echo "Deployed ${{ needs.build.outputs.tag }} — https://api.ciro-fuel.ciro.app/api/v1/health/live"
