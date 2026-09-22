@@ -16,7 +16,11 @@ WORKDIR /app
 ENV NODE_ENV=production
 RUN addgroup -S nodejs && adduser -S nestjs -G nodejs
 COPY package*.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+# `prepare` runs husky, a devDependency that --omit=dev has already excluded, so
+# npm ci would fail with `husky: not found` (exit 127). Drop the script before
+# installing. --ignore-scripts is NOT an option here: bcrypt's install script is
+# what fetches its native binding.
+RUN npm pkg delete scripts.prepare && npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist
 # Kept for the LOCAL driver (spec 012 T070): development and the e2e suites run
 # STORAGE_DRIVER=local and write a real `sys_storge` directory — the
