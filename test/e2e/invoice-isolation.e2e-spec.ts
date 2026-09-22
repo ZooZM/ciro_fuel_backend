@@ -72,7 +72,7 @@ describe('Invoice list isolation and cross-party settlement visibility (FR-041, 
       .expect(404);
   });
 
-  it("a DEFERRED invoice settled by the transporter it names reads back as SETTLED for the Fuel Company that issued it", async () => {
+  it('a DEFERRED invoice settled by the transporter it names reads back as SETTLED for the Fuel Company that issued it', async () => {
     const server = app.getHttpServer();
     const { client, admin, transportAdmin } = fixtures.companyA;
 

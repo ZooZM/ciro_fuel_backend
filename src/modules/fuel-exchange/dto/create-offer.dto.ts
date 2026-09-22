@@ -1,4 +1,13 @@
-import { IsDateString, IsEnum, IsNumber, IsOptional, IsString, IsUrl, MaxLength, Min } from 'class-validator';
+import {
+  IsDateString,
+  IsEnum,
+  IsNumber,
+  IsOptional,
+  IsString,
+  IsUrl,
+  MaxLength,
+  Min,
+} from 'class-validator';
 import { FuelType } from '../../../common/enums/fuel-type.enum';
 import { GovernorateCode } from '../../../common/enums/region.enum';
 

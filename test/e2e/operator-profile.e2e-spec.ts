@@ -159,10 +159,7 @@ describe('The operator`s own account and sign-in number (US7)', () => {
       const otherAdminPhone = fixtures.companyA.admin.phone;
       const sentBefore = sentMessages.length;
 
-      const res = await requestPhoneChange(
-        fixtures.superAdmin.token,
-        otherAdminPhone,
-      ).expect(409);
+      const res = await requestPhoneChange(fixtures.superAdmin.token, otherAdminPhone).expect(409);
       expect(res.body.error ?? res.body.message?.error).toBe(ErrorCode.PHONE_IN_USE);
 
       // The assertion the CLIENT/DRIVER-scoped lookup fails: it would have
@@ -177,10 +174,9 @@ describe('The operator`s own account and sign-in number (US7)', () => {
 
     it('still refuses a number held by a CLIENT — the pre-existing case', async () => {
       const sentBefore = sentMessages.length;
-      await requestPhoneChange(
-        fixtures.superAdmin.token,
-        fixtures.companyA.client.phone,
-      ).expect(409);
+      await requestPhoneChange(fixtures.superAdmin.token, fixtures.companyA.client.phone).expect(
+        409,
+      );
       expect(sentMessages.length).toBe(sentBefore);
     });
   });

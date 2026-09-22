@@ -39,10 +39,7 @@ import { PhoneVerificationService } from './services/phone-verification.service'
 import { CreditLimitRequestsService } from './services/credit-limit-requests.service';
 import { LitreBalancesService } from '../litre-balances/litre-balances.service';
 import { CreateCreditLimitRequestDto } from './dto/create-credit-limit-request.dto';
-import { ResolveCreditLimitRequestDto } from './dto/resolve-credit-limit-request.dto';
-import { CreditLimitRequestState } from '../../common/enums/credit-limit-request-state.enum';
 import { NotificationsService } from '../notifications/notifications.service';
-import { NotificationType } from '../../common/enums/notification-type.enum';
 import { CompaniesService } from '../companies/companies.service';
 import { UserThrottlerGuard } from '../../common/guards/user-throttler.guard';
 import { SessionAuditService } from '../sessions/session-audit.service';

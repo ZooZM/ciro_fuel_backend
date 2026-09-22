@@ -351,10 +351,7 @@ export async function resetFixtureDispatchState(
  * A no-op unless the order is actually awaiting the client, so it is safe to
  * call unconditionally.
  */
-export async function settleClientReview(
-  app: INestApplication,
-  orderId: string,
-): Promise<void> {
+export async function settleClientReview(app: INestApplication, orderId: string): Promise<void> {
   const { OrdersService } = await import('../../src/modules/orders/orders.service');
   const { OrderStatus } = await import('../../src/common/enums/order-status.enum');
   const { SYSTEM_ACTOR } = await import('../../src/common/constants/system-actor');
@@ -520,11 +517,18 @@ async function createFuelCompanyOnly(
 
   return {
     companyId: String(company._id),
-    admin: { id: String(admin._id), email: admin.email, token: adminAuth.accessToken, phone: adminPhone },
+    admin: {
+      id: String(admin._id),
+      email: admin.email,
+      token: adminAuth.accessToken,
+      phone: adminPhone,
+    },
   };
 }
 
-export async function seedThreeFuelCompanies(app: INestApplication): Promise<ThreeFuelCompanyFixture> {
+export async function seedThreeFuelCompanies(
+  app: INestApplication,
+): Promise<ThreeFuelCompanyFixture> {
   const usersService = app.get(UsersService);
   const authService = app.get(AuthService);
 
@@ -543,9 +547,15 @@ export async function seedThreeFuelCompanies(app: INestApplication): Promise<Thr
   });
 
   const [companyA, companyB, companyC] = await Promise.all([
-    createFuelCompanyOnly(app, 'ExchangeCoA', [{ fuelType: FuelType.PETROL_95, basePricePerLiter: 2.3 }]),
-    createFuelCompanyOnly(app, 'ExchangeCoB', [{ fuelType: FuelType.PETROL_95, basePricePerLiter: 2.35 }]),
-    createFuelCompanyOnly(app, 'ExchangeCoC', [{ fuelType: FuelType.DIESEL, basePricePerLiter: 2.5 }]),
+    createFuelCompanyOnly(app, 'ExchangeCoA', [
+      { fuelType: FuelType.PETROL_95, basePricePerLiter: 2.3 },
+    ]),
+    createFuelCompanyOnly(app, 'ExchangeCoB', [
+      { fuelType: FuelType.PETROL_95, basePricePerLiter: 2.35 },
+    ]),
+    createFuelCompanyOnly(app, 'ExchangeCoC', [
+      { fuelType: FuelType.DIESEL, basePricePerLiter: 2.5 },
+    ]),
   ]);
 
   return {

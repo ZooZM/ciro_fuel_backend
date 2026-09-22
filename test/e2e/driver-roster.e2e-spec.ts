@@ -315,10 +315,7 @@ describe('GET /drivers/roster — the platform`s driver roster (US5)', () => {
     beforeAll(async () => {
       await connection
         .collection('users')
-        .updateOne(
-          { _id: new Types.ObjectId(neverDrivenDriverId) },
-          { $set: { isActive: false } },
-        );
+        .updateOne({ _id: new Types.ObjectId(neverDrivenDriverId) }, { $set: { isActive: false } });
     });
 
     it('isActive=false narrows to deactivated drivers', async () => {

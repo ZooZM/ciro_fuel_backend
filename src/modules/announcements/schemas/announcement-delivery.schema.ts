@@ -79,8 +79,7 @@ export class AnnouncementDelivery {
   failureReason?: AnnouncementDeliveryFailureReason;
 }
 
-export const AnnouncementDeliverySchema =
-  SchemaFactory.createForClass(AnnouncementDelivery);
+export const AnnouncementDeliverySchema = SchemaFactory.createForClass(AnnouncementDelivery);
 
 /**
  * **THIS INDEX IS THE FR-053 GUARANTEE.** Not the queue, and not a prior read.

@@ -36,7 +36,10 @@ export class BillingController {
 
   @Roles(UserRole.SUPER_ADMIN)
   @Put('cashback-programme')
-  setCashbackProgramme(@CurrentUser() user: AuthenticatedUser, @Body() dto: SetCashbackProgrammeDto) {
+  setCashbackProgramme(
+    @CurrentUser() user: AuthenticatedUser,
+    @Body() dto: SetCashbackProgrammeDto,
+  ) {
     return this.billingService.setCashbackProgramme(dto, user.userId);
   }
 

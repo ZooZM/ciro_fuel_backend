@@ -2,8 +2,16 @@ import mongoose, { Connection } from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import { BadRequestException } from '@nestjs/common';
 import { FuelExchangeService } from '../../src/modules/fuel-exchange/fuel-exchange.service';
-import { ExchangeOffer, ExchangeOfferSchema, ExchangeOfferDocument } from '../../src/modules/fuel-exchange/schemas/exchange-offer.schema';
-import { ExchangeProposal, ExchangeProposalSchema, ExchangeProposalDocument } from '../../src/modules/fuel-exchange/schemas/exchange-proposal.schema';
+import {
+  ExchangeOffer,
+  ExchangeOfferSchema,
+  ExchangeOfferDocument,
+} from '../../src/modules/fuel-exchange/schemas/exchange-offer.schema';
+import {
+  ExchangeProposal,
+  ExchangeProposalSchema,
+  ExchangeProposalDocument,
+} from '../../src/modules/fuel-exchange/schemas/exchange-proposal.schema';
 import { User, UserSchema, UserDocument } from '../../src/modules/users/schemas/user.schema';
 import { CompaniesService } from '../../src/modules/companies/companies.service';
 import { NotificationsService } from '../../src/modules/notifications/notifications.service';
@@ -32,7 +40,16 @@ describe('FuelExchangeService (US1 non-transactional paths)', () => {
   let offerModel: mongoose.Model<ExchangeOfferDocument>;
   let proposalModel: mongoose.Model<ExchangeProposalDocument>;
   let userModel: mongoose.Model<UserDocument>;
-  let companiesService: jest.Mocked<Pick<CompaniesService, 'findActiveFuelCompaniesSellingGrade' | 'findSuspendedFuelCompanyIds' | 'findById' | 'isActive' | 'getBasePrice'>>;
+  let companiesService: jest.Mocked<
+    Pick<
+      CompaniesService,
+      | 'findActiveFuelCompaniesSellingGrade'
+      | 'findSuspendedFuelCompanyIds'
+      | 'findById'
+      | 'isActive'
+      | 'getBasePrice'
+    >
+  >;
   let notificationsService: jest.Mocked<Pick<NotificationsService, 'notify'>>;
   let service: FuelExchangeService;
 
@@ -55,9 +72,13 @@ describe('FuelExchangeService (US1 non-transactional paths)', () => {
 
   beforeEach(() => {
     companiesService = {
-      findActiveFuelCompaniesSellingGrade: jest.fn().mockResolvedValue([{ _id: new mongoose.Types.ObjectId(companyB) }]),
+      findActiveFuelCompaniesSellingGrade: jest
+        .fn()
+        .mockResolvedValue([{ _id: new mongoose.Types.ObjectId(companyB) }]),
       findSuspendedFuelCompanyIds: jest.fn().mockResolvedValue([]),
-      findById: jest.fn().mockResolvedValue({ fuelPrices: [{ fuelType: FuelType.PETROL_95 }] } as never),
+      findById: jest
+        .fn()
+        .mockResolvedValue({ fuelPrices: [{ fuelType: FuelType.PETROL_95 }] } as never),
       isActive: jest.fn().mockResolvedValue(true),
       getBasePrice: jest.fn().mockResolvedValue(2.2),
     } as never;
@@ -99,7 +120,11 @@ describe('FuelExchangeService (US1 non-transactional paths)', () => {
 
   it('refuses a deliveryAt that is not in the future', async () => {
     await expect(
-      service.create(companyA, userA, offerDto({ deliveryAt: new Date(Date.now() - 1000).toISOString() })),
+      service.create(
+        companyA,
+        userA,
+        offerDto({ deliveryAt: new Date(Date.now() - 1000).toISOString() }),
+      ),
     ).rejects.toThrow(BadRequestException);
   });
 
@@ -115,7 +140,7 @@ describe('FuelExchangeService (US1 non-transactional paths)', () => {
     expect(JSON.stringify(raw)).not.toMatch(/unitPrice/i);
   });
 
-  it('fans out EXCHANGE_OFFER_AVAILABLE to the resolved eligible companies\' admins', async () => {
+  it("fans out EXCHANGE_OFFER_AVAILABLE to the resolved eligible companies' admins", async () => {
     await userModel.create({
       companyId: new mongoose.Types.ObjectId(companyB),
       role: 'FUEL_COMPANY_ADMIN',
@@ -136,12 +161,16 @@ describe('FuelExchangeService (US1 non-transactional paths)', () => {
     const created = await service.create(companyA, userA, offerDto());
 
     const outgoing = await service.findAll(companyA, 'outgoing', undefined, undefined);
-    expect(outgoing.items.map((i) => String((i as never as { _id: unknown })._id))).toContain(String(created._id));
+    expect(outgoing.items.map((i) => String((i as never as { _id: unknown })._id))).toContain(
+      String(created._id),
+    );
 
     // Company A raised it, so it must never appear in A's own incoming list (FR-009) —
     // buildIncomingFilter would otherwise need to special-case "not raised by me",
     // which it does via `raisedByCompanyId: { $nin: [...suspended, acting] }`.
     const incoming = await service.findAll(companyA, 'incoming', undefined, undefined);
-    expect(incoming.items.map((i) => String((i as never as { _id: unknown })._id))).not.toContain(String(created._id));
+    expect(incoming.items.map((i) => String((i as never as { _id: unknown })._id))).not.toContain(
+      String(created._id),
+    );
   });
 });

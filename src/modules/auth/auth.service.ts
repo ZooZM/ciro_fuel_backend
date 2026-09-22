@@ -5,10 +5,7 @@ import { InjectConnection } from '@nestjs/mongoose';
 import { Connection } from 'mongoose';
 import { randomBytes } from 'node:crypto';
 import { UsersService } from '../users/users.service';
-import {
-  AuthenticatedUser,
-  JwtPayload,
-} from '../../common/interfaces/jwt-payload.interface';
+import { AuthenticatedUser, JwtPayload } from '../../common/interfaces/jwt-payload.interface';
 import { UserDocument } from '../users/schemas/user.schema';
 import { LoginDto } from './dto/login.dto';
 import { SessionAuditService } from '../sessions/session-audit.service';

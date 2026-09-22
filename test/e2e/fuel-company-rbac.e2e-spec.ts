@@ -57,13 +57,41 @@ describe('Fuel company RBAC — server-side denial matrix (FR-004, Constitution 
   // Every FUEL_COMPANY_ADMIN-only (or FUEL_COMPANY_ADMIN-plus-named-others) endpoint this
   // feature's early phases wire on the dashboard, as decorated today in the controllers.
   const endpoints: Endpoint[] = [
-    { name: 'PUT /companies/:id/fuel-prices', method: 'put', path: () => `/api/v1/companies/${fixtures.companyA.companyId}/fuel-prices` },
-    { name: 'PUT /companies/:id/pricing-config', method: 'put', path: () => `/api/v1/companies/${fixtures.companyA.companyId}/pricing-config` },
-    { name: 'POST /companies/:id/transporters', method: 'post', path: () => `/api/v1/companies/${fixtures.companyA.companyId}/transporters` },
-    { name: 'PUT /companies/:id/regions', method: 'put', path: () => `/api/v1/companies/${fixtures.companyA.transportCompanyId}/regions` },
-    { name: 'PATCH /orders/:id/approve', method: 'patch', path: () => `/api/v1/orders/${PLACEHOLDER_ID}/approve` },
-    { name: 'PATCH /orders/:id/route', method: 'patch', path: () => `/api/v1/orders/${PLACEHOLDER_ID}/route` },
-    { name: 'PATCH /orders/:id/reject', method: 'patch', path: () => `/api/v1/orders/${PLACEHOLDER_ID}/reject` },
+    {
+      name: 'PUT /companies/:id/fuel-prices',
+      method: 'put',
+      path: () => `/api/v1/companies/${fixtures.companyA.companyId}/fuel-prices`,
+    },
+    {
+      name: 'PUT /companies/:id/pricing-config',
+      method: 'put',
+      path: () => `/api/v1/companies/${fixtures.companyA.companyId}/pricing-config`,
+    },
+    {
+      name: 'POST /companies/:id/transporters',
+      method: 'post',
+      path: () => `/api/v1/companies/${fixtures.companyA.companyId}/transporters`,
+    },
+    {
+      name: 'PUT /companies/:id/regions',
+      method: 'put',
+      path: () => `/api/v1/companies/${fixtures.companyA.transportCompanyId}/regions`,
+    },
+    {
+      name: 'PATCH /orders/:id/approve',
+      method: 'patch',
+      path: () => `/api/v1/orders/${PLACEHOLDER_ID}/approve`,
+    },
+    {
+      name: 'PATCH /orders/:id/route',
+      method: 'patch',
+      path: () => `/api/v1/orders/${PLACEHOLDER_ID}/route`,
+    },
+    {
+      name: 'PATCH /orders/:id/reject',
+      method: 'patch',
+      path: () => `/api/v1/orders/${PLACEHOLDER_ID}/reject`,
+    },
     // spec 017 T054/FR-020: SUPER_ADMIN is now admitted here — the platform operator
     // can force a delivery closed, on the same three stages and with the same recorded
     // reason. The three other roles are still refused, which is what this row still
@@ -76,13 +104,42 @@ describe('Fuel company RBAC — server-side denial matrix (FR-004, Constitution 
       alsoAdmits: ['SUPER_ADMIN'],
     },
     // redispatch also admits CLIENT (spec 004) — refused list excludes it here.
-    { name: 'POST /orders/:id/redispatch', method: 'post', path: () => `/api/v1/orders/${PLACEHOLDER_ID}/redispatch`, alsoAdmits: ['CLIENT'] },
-    { name: 'PATCH /stations/:id', method: 'patch', path: () => `/api/v1/stations/${PLACEHOLDER_ID}` },
-    { name: 'DELETE /stations/:id', method: 'delete', path: () => `/api/v1/stations/${PLACEHOLDER_ID}` },
-    { name: 'GET /users/:id/stations', method: 'get', path: () => `/api/v1/users/${PLACEHOLDER_ID}/stations` },
-    { name: 'POST /users/:id/stations', method: 'post', path: () => `/api/v1/users/${PLACEHOLDER_ID}/stations` },
-    { name: 'PUT /users/:id/credit-limit', method: 'put', path: () => `/api/v1/users/${PLACEHOLDER_ID}/credit-limit` },
-    { name: 'GET /users/:id/credit-limit', method: 'get', path: () => `/api/v1/users/${PLACEHOLDER_ID}/credit-limit` },
+    {
+      name: 'POST /orders/:id/redispatch',
+      method: 'post',
+      path: () => `/api/v1/orders/${PLACEHOLDER_ID}/redispatch`,
+      alsoAdmits: ['CLIENT'],
+    },
+    {
+      name: 'PATCH /stations/:id',
+      method: 'patch',
+      path: () => `/api/v1/stations/${PLACEHOLDER_ID}`,
+    },
+    {
+      name: 'DELETE /stations/:id',
+      method: 'delete',
+      path: () => `/api/v1/stations/${PLACEHOLDER_ID}`,
+    },
+    {
+      name: 'GET /users/:id/stations',
+      method: 'get',
+      path: () => `/api/v1/users/${PLACEHOLDER_ID}/stations`,
+    },
+    {
+      name: 'POST /users/:id/stations',
+      method: 'post',
+      path: () => `/api/v1/users/${PLACEHOLDER_ID}/stations`,
+    },
+    {
+      name: 'PUT /users/:id/credit-limit',
+      method: 'put',
+      path: () => `/api/v1/users/${PLACEHOLDER_ID}/credit-limit`,
+    },
+    {
+      name: 'GET /users/:id/credit-limit',
+      method: 'get',
+      path: () => `/api/v1/users/${PLACEHOLDER_ID}/credit-limit`,
+    },
   ];
 
   const roleTokens = () => ({

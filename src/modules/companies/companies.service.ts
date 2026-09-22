@@ -185,7 +185,6 @@ export class CompaniesService {
     return this.companyModel.find(query).exec();
   }
 
-
   /**
    * spec 016 (broadcast fuel exchange offers) FR-005/FR-007 — every OTHER active fuel
    * company that sells `fuelType`, used both to refuse a raise with no eligible

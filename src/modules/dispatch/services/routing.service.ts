@@ -3,8 +3,6 @@ import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { ConfigService } from '@nestjs/config';
 import { ClientSession, Connection, Model, Types } from 'mongoose';
 import { Company, CompanyDocument } from '../../companies/schemas/company.schema';
-import { CompanyType } from '../../../common/enums/company-type.enum';
-import { CompanyStatus } from '../../../common/enums/company-status.enum';
 import { RegionCode } from '../../../common/enums/region.enum';
 import { OrderStatus } from '../../../common/enums/order-status.enum';
 import { Order, OrderDocument } from '../../orders/schemas/order.schema';
@@ -252,9 +250,7 @@ export class RoutingService {
           // than no clock.
           ...(order.paymentMethod === PaymentMethod.DIRECT
             ? {
-                paymentDeadline: new Date(
-                  Date.now() + this.paymentDeadlineMinutes() * 60_000,
-                ),
+                paymentDeadline: new Date(Date.now() + this.paymentDeadlineMinutes() * 60_000),
               }
             : {}),
         },

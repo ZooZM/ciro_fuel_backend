@@ -17,7 +17,12 @@ export type ExchangeProposalDocument = ExchangeProposal & Document;
  */
 @Schema({ timestamps: true })
 export class ExchangeProposal {
-  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'ExchangeOffer', required: true, immutable: true })
+  @Prop({
+    type: MongooseSchema.Types.ObjectId,
+    ref: 'ExchangeOffer',
+    required: true,
+    immutable: true,
+  })
   offerId!: Types.ObjectId;
 
   // Denormalised so the proposal-scope filter never needs a `$lookup` (research R3) — a

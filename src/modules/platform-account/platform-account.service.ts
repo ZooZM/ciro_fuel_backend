@@ -10,7 +10,7 @@ import { ErrorCode } from '../../common/enums/error-code.enum';
 import { CursorSortField } from '../../common/pagination/cursor.util';
 import { paginate, PaginatedResponse } from '../../common/pagination/paginate.util';
 import { isDuplicateKeyError } from '../../common/utils/mongo-error.util';
-import { AccountMovementDirection, directionForKind } from '../../common/enums/account-movement-direction.enum';
+import { directionForKind } from '../../common/enums/account-movement-direction.enum';
 
 // data-model.md's `(companyId, createdAt, _id)` index — `companyId` itself is applied by
 // the tenant-scope plugin's ambient filter, never listed here (same convention as
@@ -68,12 +68,16 @@ export class PlatformAccountService {
           amount: input.amount,
           currency: input.currency,
           state: input.state,
-          sourceInvoiceId: input.sourceInvoiceId ? new Types.ObjectId(input.sourceInvoiceId) : undefined,
+          sourceInvoiceId: input.sourceInvoiceId
+            ? new Types.ObjectId(input.sourceInvoiceId)
+            : undefined,
           appliedRate: input.appliedRate,
           appliedBasis: input.appliedBasis,
           method: input.method,
           reference: input.reference,
-          documentFileId: input.documentFileId ? new Types.ObjectId(input.documentFileId) : undefined,
+          documentFileId: input.documentFileId
+            ? new Types.ObjectId(input.documentFileId)
+            : undefined,
           reversalOfId: input.reversalOfId ? new Types.ObjectId(input.reversalOfId) : undefined,
           confirmedBy: input.confirmedBy ? new Types.ObjectId(input.confirmedBy) : undefined,
           confirmedAt: input.confirmedAt,
@@ -99,7 +103,12 @@ export class PlatformAccountService {
    */
   async recordPayment(
     companyId: string | Types.ObjectId,
-    input: { amount: number; method: SettlementMethod; reference?: string; documentFileId?: string },
+    input: {
+      amount: number;
+      method: SettlementMethod;
+      reference?: string;
+      documentFileId?: string;
+    },
     currency: string,
   ): Promise<AccountMovementDocument> {
     if (!input.reference && !input.documentFileId) {
@@ -236,8 +245,18 @@ export class PlatformAccountService {
   async confirmPayment(id: string, confirmedBy: string): Promise<AccountMovementDocument> {
     const result = await this.accountMovementModel
       .findOneAndUpdate(
-        { _id: id, kind: AccountMovementKind.PAYMENT_RECORDED, state: AccountMovementState.RECORDED },
-        { $set: { state: AccountMovementState.CONFIRMED, confirmedBy: new Types.ObjectId(confirmedBy), confirmedAt: new Date() } },
+        {
+          _id: id,
+          kind: AccountMovementKind.PAYMENT_RECORDED,
+          state: AccountMovementState.RECORDED,
+        },
+        {
+          $set: {
+            state: AccountMovementState.CONFIRMED,
+            confirmedBy: new Types.ObjectId(confirmedBy),
+            confirmedAt: new Date(),
+          },
+        },
         { new: true },
       )
       .exec();
@@ -259,7 +278,12 @@ export class PlatformAccountService {
   // load-bearing for SUPER_ADMIN, who bypasses the plugin and otherwise sees every
   // company's movements mixed together with no way to narrow to one.
   async listMovements(
-    filter: { kind?: AccountMovementKind; state?: AccountMovementState; cursor?: string; companyId?: string } = {},
+    filter: {
+      kind?: AccountMovementKind;
+      state?: AccountMovementState;
+      cursor?: string;
+      companyId?: string;
+    } = {},
   ): Promise<PaginatedResponse<Record<string, unknown>>> {
     const query: Record<string, unknown> = {};
     if (filter.kind !== undefined) query.kind = filter.kind;
@@ -307,7 +331,11 @@ export class PlatformAccountService {
     session?: ClientSession,
   ): Promise<number> {
     const query = this.accountMovementModel
-      .find({ companyId: new Types.ObjectId(companyId), kind, state: AccountMovementState.CONFIRMED })
+      .find({
+        companyId: new Types.ObjectId(companyId),
+        kind,
+        state: AccountMovementState.CONFIRMED,
+      })
       .select('amount reversalOfId');
     if (session) query.session(session);
     const movements = await query.exec();
@@ -322,7 +350,11 @@ export class PlatformAccountService {
   ): Promise<void> {
     const sourceInvoiceId = new Types.ObjectId(invoiceId);
     const originals = await this.accountMovementModel
-      .find({ sourceInvoiceId, state: AccountMovementState.CONFIRMED, reversalOfId: { $exists: false } })
+      .find({
+        sourceInvoiceId,
+        state: AccountMovementState.CONFIRMED,
+        reversalOfId: { $exists: false },
+      })
       .session(session)
       .exec();
 

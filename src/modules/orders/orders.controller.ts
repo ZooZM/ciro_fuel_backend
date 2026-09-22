@@ -260,7 +260,8 @@ export class OrdersController {
       confirmedAt: current.confirmedAt ?? null,
       orderedQuantityLitres,
       suppliedQuantityLitres,
-      proportionFulfilled: orderedQuantityLitres > 0 ? suppliedQuantityLitres / orderedQuantityLitres : 0,
+      proportionFulfilled:
+        orderedQuantityLitres > 0 ? suppliedQuantityLitres / orderedQuantityLitres : 0,
       shortfallLitres: orderedQuantityLitres - suppliedQuantityLitres,
     };
   }
@@ -305,7 +306,12 @@ export class OrdersController {
       // handover is the customer's business. Who wrote what about them is not.
       if (Array.isArray(base.statusHistory)) {
         base.statusHistory = (base.statusHistory as Record<string, unknown>[]).map((entry) => {
-          const { overrideReason: _reason, actorId: _actorId, actorRole: _actorRole, ...rest } = entry;
+          const {
+            overrideReason: _reason,
+            actorId: _actorId,
+            actorRole: _actorRole,
+            ...rest
+          } = entry;
           return rest;
         });
       }
@@ -460,10 +466,7 @@ export class OrdersController {
     // demand a status it no longer has. Raising the customer's limit would fix
     // the cause and there would still be no way to move the order. An
     // APPROVED-but-unrouted order is exactly what this endpoint is for.
-    if (
-      order.status !== OrderStatus.AWAITING_ROUTING &&
-      order.status !== OrderStatus.APPROVED
-    ) {
+    if (order.status !== OrderStatus.AWAITING_ROUTING && order.status !== OrderStatus.APPROVED) {
       throw new ConflictException(
         'Order must be AWAITING_ROUTING or APPROVED to route it manually',
       );
@@ -1037,11 +1040,11 @@ export class OrdersController {
     @Body() dto: ConfirmSupplierInvoiceDto,
   ) {
     const order = await this.ordersService.findById(id);
-    const { order: updated, shortfallLitres, wentNegative } = await this.supplierInvoicesService.confirm(
-      order,
-      dto,
-      user.userId,
-    );
+    const {
+      order: updated,
+      shortfallLitres,
+      wentNegative,
+    } = await this.supplierInvoicesService.confirm(order, dto, user.userId);
     return {
       ...this.toRoleScopedShape(updated, user),
       shortfallLitres,
@@ -1059,11 +1062,11 @@ export class OrdersController {
     @Body() dto: ConfirmSupplierInvoiceDto,
   ) {
     const order = await this.ordersService.findById(id);
-    const { order: updated, shortfallLitres, wentNegative } = await this.supplierInvoicesService.replace(
-      order,
-      dto,
-      user.userId,
-    );
+    const {
+      order: updated,
+      shortfallLitres,
+      wentNegative,
+    } = await this.supplierInvoicesService.replace(order, dto, user.userId);
     return {
       ...this.toRoleScopedShape(updated, user),
       shortfallLitres,

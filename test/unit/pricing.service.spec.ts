@@ -44,7 +44,11 @@ function buildCompaniesService(overrides?: {
  */
 function buildTransportPricing(fee?: number) {
   return {
-    resolve: jest.fn().mockResolvedValue(fee === undefined ? null : { fee, distanceKm: 10, transportCompanyIds: ['t1'] }),
+    resolve: jest
+      .fn()
+      .mockResolvedValue(
+        fee === undefined ? null : { fee, distanceKm: 10, transportCompanyIds: ['t1'] },
+      ),
   } as unknown as TransportPricingService;
 }
 
@@ -226,7 +230,12 @@ describe('PricingService', () => {
 
     it('omits the transport line entirely until a transporter is assigned — absent, not zero', async () => {
       const service = new PricingService(
-        buildCompaniesService({ unitPrice: 2, deliveryFee: 10, serviceFeePercent: 10, taxRatePercent: 10 }),
+        buildCompaniesService({
+          unitPrice: 2,
+          deliveryFee: 10,
+          serviceFeePercent: 10,
+          taxRatePercent: 10,
+        }),
         buildTransportPricing(),
         buildConfig(),
       );
@@ -258,21 +267,33 @@ describe('PricingService', () => {
 
   describe('quote — PRICING_NOT_CONFIGURED (FR-011j)', () => {
     it('throws 409 PRICING_NOT_CONFIGURED when the company has no fuel price for the grade', async () => {
-      const service = new PricingService(buildCompaniesService({ noPrice: true }), buildTransportPricing(), buildConfig());
+      const service = new PricingService(
+        buildCompaniesService({ noPrice: true }),
+        buildTransportPricing(),
+        buildConfig(),
+      );
       await expect(service.quote('company-1', FuelType.DIESEL, 100, TARGET)).rejects.toMatchObject({
         response: expect.objectContaining({ error: ErrorCode.PRICING_NOT_CONFIGURED }),
       });
     });
 
     it('throws 409 PRICING_NOT_CONFIGURED when the company has no pricingConfig at all', async () => {
-      const service = new PricingService(buildCompaniesService({ noConfig: true }), buildTransportPricing(), buildConfig());
+      const service = new PricingService(
+        buildCompaniesService({ noConfig: true }),
+        buildTransportPricing(),
+        buildConfig(),
+      );
       await expect(service.quote('company-1', FuelType.DIESEL, 100, TARGET)).rejects.toThrow(
         ConflictException,
       );
     });
 
     it('never returns a total derived from defaults or zeros when unconfigured', async () => {
-      const service = new PricingService(buildCompaniesService({ noConfig: true }), buildTransportPricing(), buildConfig());
+      const service = new PricingService(
+        buildCompaniesService({ noConfig: true }),
+        buildTransportPricing(),
+        buildConfig(),
+      );
       await expect(service.quote('company-1', FuelType.DIESEL, 100, TARGET)).rejects.toBeInstanceOf(
         ConflictException,
       );
@@ -353,7 +374,11 @@ describe('PricingService', () => {
     });
 
     it('rejects a malformed token', async () => {
-      const service = new PricingService(buildCompaniesService(), buildTransportPricing(), buildConfig());
+      const service = new PricingService(
+        buildCompaniesService(),
+        buildTransportPricing(),
+        buildConfig(),
+      );
       await expect(
         service.redeem('not-a-real-token', 'company-1', FuelType.DIESEL, 100, TARGET),
       ).rejects.toThrow(ConflictException);

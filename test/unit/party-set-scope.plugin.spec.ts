@@ -58,7 +58,11 @@ describe('partySetScopePlugin', () => {
   async function createAsA(name: string, parties: [string, string] = [FUEL_CO_A, FUEL_CO_B]) {
     return tenantContext.run(
       { userId: 'admin-a', role: UserRole.FUEL_COMPANY_ADMIN, companyId: FUEL_CO_A },
-      () => WidgetModel.create({ name, partyCompanyIds: parties.map((p) => new mongoose.Types.ObjectId(p)) }),
+      () =>
+        WidgetModel.create({
+          name,
+          partyCompanyIds: parties.map((p) => new mongoose.Types.ObjectId(p)),
+        }),
     );
   }
 
@@ -120,7 +124,10 @@ describe('partySetScopePlugin', () => {
         () =>
           WidgetModel.create({
             name: 'imposter',
-            partyCompanyIds: [new mongoose.Types.ObjectId(FUEL_CO_A), new mongoose.Types.ObjectId(FUEL_CO_B)],
+            partyCompanyIds: [
+              new mongoose.Types.ObjectId(FUEL_CO_A),
+              new mongoose.Types.ObjectId(FUEL_CO_B),
+            ],
           }),
       ),
     ).rejects.toThrow(/EXCHANGE_PARTY_INVALID|partyCompanyIds/i);
@@ -130,7 +137,11 @@ describe('partySetScopePlugin', () => {
     await expect(
       tenantContext.run(
         { userId: 'admin-a', role: UserRole.FUEL_COMPANY_ADMIN, companyId: FUEL_CO_A },
-        () => WidgetModel.create({ name: 'one-party', partyCompanyIds: [new mongoose.Types.ObjectId(FUEL_CO_A)] }),
+        () =>
+          WidgetModel.create({
+            name: 'one-party',
+            partyCompanyIds: [new mongoose.Types.ObjectId(FUEL_CO_A)],
+          }),
       ),
     ).rejects.toThrow(/EXCHANGE_PARTY_INVALID|partyCompanyIds/i);
   });
@@ -142,7 +153,9 @@ describe('partySetScopePlugin', () => {
         () =>
           WidgetModel.create({
             name: 'three-parties',
-            partyCompanyIds: [FUEL_CO_A, FUEL_CO_B, FUEL_CO_C].map((p) => new mongoose.Types.ObjectId(p)),
+            partyCompanyIds: [FUEL_CO_A, FUEL_CO_B, FUEL_CO_C].map(
+              (p) => new mongoose.Types.ObjectId(p),
+            ),
           }),
       ),
     ).rejects.toThrow(/EXCHANGE_PARTY_INVALID|partyCompanyIds/i);
@@ -152,7 +165,14 @@ describe('partySetScopePlugin', () => {
     await createAsA('a-to-b', [FUEL_CO_A, FUEL_CO_B]);
     await tenantContext.run(
       { userId: 'admin-b', role: UserRole.FUEL_COMPANY_ADMIN, companyId: FUEL_CO_B },
-      () => WidgetModel.create({ name: 'b-to-c', partyCompanyIds: [new mongoose.Types.ObjectId(FUEL_CO_B), new mongoose.Types.ObjectId(FUEL_CO_C)] }),
+      () =>
+        WidgetModel.create({
+          name: 'b-to-c',
+          partyCompanyIds: [
+            new mongoose.Types.ObjectId(FUEL_CO_B),
+            new mongoose.Types.ObjectId(FUEL_CO_C),
+          ],
+        }),
     );
     await tenantContext.run({ userId: 'ciro', role: UserRole.SUPER_ADMIN }, async () => {
       const results = await WidgetModel.find({});

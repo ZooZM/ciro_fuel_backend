@@ -1,6 +1,6 @@
 import request from 'supertest';
 import { INestApplication } from '@nestjs/common';
-import { Connection } from 'mongoose';
+import { Connection, Types } from 'mongoose';
 import { getConnectionToken } from '@nestjs/mongoose';
 import { createTestApp, TestAppContext } from '../utils/test-app.factory';
 import { seedTwoCompanies, TwoCompanyFixture, superAdminActor } from '../utils/fixtures';
@@ -72,7 +72,7 @@ describe('GET /platform/overview reconciles against the platform (US1)', () => {
     await connection
       .collection('orders')
       .updateOne(
-        { _id: new (require('mongoose').Types.ObjectId)(orderId) },
+        { _id: new Types.ObjectId(orderId) },
         { $set: { status: OrderStatus.DELIVERED, deliveredAt, finalPrice } },
       );
   }
@@ -177,9 +177,7 @@ describe('GET /platform/overview reconciles against the platform (US1)', () => {
         count: number;
       }[];
 
-      expect(segments.map((s) => s.bucket).sort()).toEqual(
-        Object.values(OrderStatusBucket).sort(),
-      );
+      expect(segments.map((s) => s.bucket).sort()).toEqual(Object.values(OrderStatusBucket).sort());
       const sum = segments.reduce((total, s) => total + s.count, 0);
       expect(sum).toBe(res.body.period.orderCount);
     });
@@ -216,7 +214,6 @@ describe('GET /platform/overview reconciles against the platform (US1)', () => {
     const DELIVERED_VALUE = 1234.5;
 
     beforeAll(async () => {
-      const { Types } = require('mongoose');
       // One order raised AND delivered inside the window.
       const deliveredId = await placeOrder(fixtures.companyA, DELIVERED_LITRES);
       await connection
@@ -356,9 +353,7 @@ describe('GET /orders/summary gives the operator its own shape (FR-023, research
 
   it('returns the six buckets and a total equal to their sum', async () => {
     const res = await summary(fixtures.superAdmin.token).expect(200);
-    expect(Object.keys(res.body.buckets).sort()).toEqual(
-      Object.values(OrderStatusBucket).sort(),
-    );
+    expect(Object.keys(res.body.buckets).sort()).toEqual(Object.values(OrderStatusBucket).sort());
     const sum = Object.values(res.body.buckets as Record<string, number>).reduce(
       (total, count) => total + count,
       0,

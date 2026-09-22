@@ -44,9 +44,7 @@ describe('Fuel price history (spec 013 successor — the data the dashboard was 
     // element this work exists to replace with a real one.
     const { service, saved } = buildService([]);
 
-    await service.setFuelPrices('c1', [
-      { fuelType: FuelType.DIESEL, basePricePerLiter: 2.1 },
-    ]);
+    await service.setFuelPrices('c1', [{ fuelType: FuelType.DIESEL, basePricePerLiter: 2.1 }]);
 
     const diesel = priceFor(saved.fuelPrices, FuelType.DIESEL);
     expect(diesel.basePricePerLiter).toBe(2.1);
@@ -59,16 +57,14 @@ describe('Fuel price history (spec 013 successor — the data the dashboard was 
       { fuelType: FuelType.DIESEL, basePricePerLiter: 2.05 },
     ]);
 
-    await service.setFuelPrices('c1', [
-      { fuelType: FuelType.DIESEL, basePricePerLiter: 2.1 },
-    ]);
+    await service.setFuelPrices('c1', [{ fuelType: FuelType.DIESEL, basePricePerLiter: 2.1 }]);
 
     const diesel = priceFor(saved.fuelPrices, FuelType.DIESEL);
     expect(diesel.previousPricePerLiter).toBe(2.05);
     expect(diesel.priceChangedAt).toBeInstanceOf(Date);
   });
 
-  it('leaves the untouched grades\' history exactly as it was', async () => {
+  it("leaves the untouched grades' history exactly as it was", async () => {
     // The defect this pins: editing DIESEL must not restamp PETROL_91.
     const longAgo = new Date('2026-08-01T06:00:00.000Z');
     const { service, saved } = buildService([
@@ -96,9 +92,7 @@ describe('Fuel price history (spec 013 successor — the data the dashboard was 
       { fuelType: FuelType.DIESEL, basePricePerLiter: 2.1, previousPricePerLiter: 2.05 },
     ]);
 
-    await service.setFuelPrices('c1', [
-      { fuelType: FuelType.DIESEL, basePricePerLiter: 1.79 },
-    ]);
+    await service.setFuelPrices('c1', [{ fuelType: FuelType.DIESEL, basePricePerLiter: 1.79 }]);
 
     expect(priceFor(saved.fuelPrices, FuelType.DIESEL).previousPricePerLiter).toBe(2.1);
   });

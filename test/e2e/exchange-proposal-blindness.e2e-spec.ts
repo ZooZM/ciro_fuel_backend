@@ -1,7 +1,12 @@
 import request from 'supertest';
 import { INestApplication } from '@nestjs/common';
 import { createTestApp, TestAppContext } from '../utils/test-app.factory';
-import { seedThreeFuelCompanies, ThreeFuelCompanyFixture, uniquePhone, DEFAULT_PASSWORD } from '../utils/fixtures';
+import {
+  seedThreeFuelCompanies,
+  ThreeFuelCompanyFixture,
+  uniquePhone,
+  DEFAULT_PASSWORD,
+} from '../utils/fixtures';
 import { CompaniesService } from '../../src/modules/companies/companies.service';
 import { UsersService } from '../../src/modules/users/users.service';
 import { AuthService } from '../../src/modules/auth/auth.service';
@@ -72,10 +77,10 @@ describe('Exchange proposal blindness (US2)', () => {
     };
   }
 
-  it('a responder\'s offer read, list and detail contain no proposal array, no rival price, no rival count, no rival name, in the RAW payload (FR-011b, SC-004, research R12)', async () => {
+  it("a responder's offer read, list and detail contain no proposal array, no rival price, no rival count, no rival name, in the RAW payload (FR-011b, SC-004, research R12)", async () => {
     const server = app.getHttpServer();
     const { admin: adminA } = fixtures.companyA;
-    const { admin: adminB, companyId: companyIdB } = fixtures.companyB;
+    const { admin: adminB } = fixtures.companyB;
     const { admin: adminC, companyId: companyIdC } = fixtures.companyC;
 
     const created = await request(server)
@@ -130,7 +135,7 @@ describe('Exchange proposal blindness (US2)', () => {
     expect(detailForA.body.declineCount).toBe(0);
   });
 
-  it('while OPEN, no viewer\'s payload carries the raising company\'s CONTACT details — only its name (FR-019, T055a)', async () => {
+  it("while OPEN, no viewer's payload carries the raising company's CONTACT details — only its name (FR-019, T055a)", async () => {
     const server = app.getHttpServer();
     const { admin: adminA, companyId: companyIdA } = fixtures.companyA;
     const { admin: adminB } = fixtures.companyB;
@@ -195,7 +200,10 @@ describe('Exchange proposal blindness (US2)', () => {
       phone,
       isActive: true,
     });
-    const { accessToken } = await authService.login({ email: admin.email, password: DEFAULT_PASSWORD });
+    const { accessToken } = await authService.login({
+      email: admin.email,
+      password: DEFAULT_PASSWORD,
+    });
 
     const incoming = await request(server)
       .get('/api/v1/fuel-exchange/offers?direction=incoming')

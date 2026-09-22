@@ -6,7 +6,10 @@ import { getModelToken } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { CompaniesService } from '../../src/modules/companies/companies.service';
 import { FuelExchangeService } from '../../src/modules/fuel-exchange/fuel-exchange.service';
-import { ExchangeOffer, ExchangeOfferDocument } from '../../src/modules/fuel-exchange/schemas/exchange-offer.schema';
+import {
+  ExchangeOffer,
+  ExchangeOfferDocument,
+} from '../../src/modules/fuel-exchange/schemas/exchange-offer.schema';
 import { TenantContextService } from '../../src/common/context/tenant-context.service';
 import { CompanyStatus } from '../../src/common/enums/company-status.enum';
 import { UserRole } from '../../src/common/enums/user-role.enum';
@@ -44,7 +47,7 @@ describe('Exchange offers — raise to the market (US1)', () => {
 
   it('raise once produces exactly one offer, reaching B (eligible) but not C (diesel-only); A sees it outgoing; no price/recipient anywhere (SC-002)', async () => {
     const server = app.getHttpServer();
-    const { admin: adminA, companyId: companyIdA } = fixtures.companyA;
+    const { admin: adminA } = fixtures.companyA;
     const { admin: adminB } = fixtures.companyB;
     const { admin: adminC } = fixtures.companyC;
 
@@ -95,7 +98,9 @@ describe('Exchange offers — raise to the market (US1)', () => {
       .set('Authorization', `Bearer ${adminB.token}`)
       .expect(200);
     expect(
-      notificationsForB.body.items.some((n: { type: string }) => n.type === 'EXCHANGE_OFFER_AVAILABLE'),
+      notificationsForB.body.items.some(
+        (n: { type: string }) => n.type === 'EXCHANGE_OFFER_AVAILABLE',
+      ),
     ).toBe(true);
 
     const notificationsForA = await request(server)
@@ -103,7 +108,9 @@ describe('Exchange offers — raise to the market (US1)', () => {
       .set('Authorization', `Bearer ${adminA.token}`)
       .expect(200);
     expect(
-      notificationsForA.body.items.some((n: { type: string }) => n.type === 'EXCHANGE_OFFER_AVAILABLE'),
+      notificationsForA.body.items.some(
+        (n: { type: string }) => n.type === 'EXCHANGE_OFFER_AVAILABLE',
+      ),
     ).toBe(false);
   });
 
@@ -140,7 +147,7 @@ describe('Exchange offers — raise to the market (US1)', () => {
       .expect(403);
   });
 
-  it('a suspended raiser\'s open offer disappears from another company\'s incoming list, but the offer itself remains a readable record (FR-010, research R13)', async () => {
+  it("a suspended raiser's open offer disappears from another company's incoming list, but the offer itself remains a readable record (FR-010, research R13)", async () => {
     const server = app.getHttpServer();
     const { admin: adminA, companyId: companyIdA } = fixtures.companyA;
     const { admin: adminB } = fixtures.companyB;
@@ -159,7 +166,9 @@ describe('Exchange offers — raise to the market (US1)', () => {
         .get('/api/v1/fuel-exchange/offers?direction=incoming')
         .set('Authorization', `Bearer ${adminB.token}`)
         .expect(200);
-      expect(incomingAfterSuspension.body.items.map((o: { _id: string }) => o._id)).not.toContain(id);
+      expect(incomingAfterSuspension.body.items.map((o: { _id: string }) => o._id)).not.toContain(
+        id,
+      );
 
       // Suspension excludes the offer from OTHER companies' listings (a service-layer
       // relevance rule, research R13) — it never revokes the underlying record's
@@ -185,14 +194,32 @@ describe('Exchange offers — raise to the market (US1)', () => {
     const { admin: adminB } = fixtures.companyB;
 
     const [ordersBeforeA, invoicesBeforeA, balancesBeforeA] = await Promise.all([
-      request(server).get('/api/v1/orders').set('Authorization', `Bearer ${adminA.token}`).expect(200),
-      request(server).get('/api/v1/invoices').set('Authorization', `Bearer ${adminA.token}`).expect(200),
-      request(server).get('/api/v1/litre-balances').set('Authorization', `Bearer ${adminA.token}`).expect(200),
+      request(server)
+        .get('/api/v1/orders')
+        .set('Authorization', `Bearer ${adminA.token}`)
+        .expect(200),
+      request(server)
+        .get('/api/v1/invoices')
+        .set('Authorization', `Bearer ${adminA.token}`)
+        .expect(200),
+      request(server)
+        .get('/api/v1/litre-balances')
+        .set('Authorization', `Bearer ${adminA.token}`)
+        .expect(200),
     ]);
     const [ordersBeforeB, invoicesBeforeB, balancesBeforeB] = await Promise.all([
-      request(server).get('/api/v1/orders').set('Authorization', `Bearer ${adminB.token}`).expect(200),
-      request(server).get('/api/v1/invoices').set('Authorization', `Bearer ${adminB.token}`).expect(200),
-      request(server).get('/api/v1/litre-balances').set('Authorization', `Bearer ${adminB.token}`).expect(200),
+      request(server)
+        .get('/api/v1/orders')
+        .set('Authorization', `Bearer ${adminB.token}`)
+        .expect(200),
+      request(server)
+        .get('/api/v1/invoices')
+        .set('Authorization', `Bearer ${adminB.token}`)
+        .expect(200),
+      request(server)
+        .get('/api/v1/litre-balances')
+        .set('Authorization', `Bearer ${adminB.token}`)
+        .expect(200),
     ]);
 
     const created = await request(server)
@@ -213,14 +240,32 @@ describe('Exchange offers — raise to the market (US1)', () => {
       .expect(200);
 
     const [ordersAfterA, invoicesAfterA, balancesAfterA] = await Promise.all([
-      request(server).get('/api/v1/orders').set('Authorization', `Bearer ${adminA.token}`).expect(200),
-      request(server).get('/api/v1/invoices').set('Authorization', `Bearer ${adminA.token}`).expect(200),
-      request(server).get('/api/v1/litre-balances').set('Authorization', `Bearer ${adminA.token}`).expect(200),
+      request(server)
+        .get('/api/v1/orders')
+        .set('Authorization', `Bearer ${adminA.token}`)
+        .expect(200),
+      request(server)
+        .get('/api/v1/invoices')
+        .set('Authorization', `Bearer ${adminA.token}`)
+        .expect(200),
+      request(server)
+        .get('/api/v1/litre-balances')
+        .set('Authorization', `Bearer ${adminA.token}`)
+        .expect(200),
     ]);
     const [ordersAfterB, invoicesAfterB, balancesAfterB] = await Promise.all([
-      request(server).get('/api/v1/orders').set('Authorization', `Bearer ${adminB.token}`).expect(200),
-      request(server).get('/api/v1/invoices').set('Authorization', `Bearer ${adminB.token}`).expect(200),
-      request(server).get('/api/v1/litre-balances').set('Authorization', `Bearer ${adminB.token}`).expect(200),
+      request(server)
+        .get('/api/v1/orders')
+        .set('Authorization', `Bearer ${adminB.token}`)
+        .expect(200),
+      request(server)
+        .get('/api/v1/invoices')
+        .set('Authorization', `Bearer ${adminB.token}`)
+        .expect(200),
+      request(server)
+        .get('/api/v1/litre-balances')
+        .set('Authorization', `Bearer ${adminB.token}`)
+        .expect(200),
     ]);
 
     expect(ordersAfterA.body.items.length).toBe(ordersBeforeA.body.items.length);
@@ -331,7 +376,9 @@ describe('Exchange offers — raise to the market (US1)', () => {
       .set('Authorization', `Bearer ${adminB.token}`)
       .expect(200);
     expect(
-      notificationsForB.body.items.some((n: { type: string }) => n.type === 'EXCHANGE_OFFER_CLOSED'),
+      notificationsForB.body.items.some(
+        (n: { type: string }) => n.type === 'EXCHANGE_OFFER_CLOSED',
+      ),
     ).toBe(true);
   });
 
@@ -339,7 +386,7 @@ describe('Exchange offers — raise to the market (US1)', () => {
   // US6 — summary counts (T094)
   // ==========================================================================
 
-  it('summary counts every matching offer across the whole set, not only a loaded page, and excludes a previous month\'s award (SC-012)', async () => {
+  it("summary counts every matching offer across the whole set, not only a loaded page, and excludes a previous month's award (SC-012)", async () => {
     const server = app.getHttpServer();
     const { admin: adminA } = fixtures.companyA;
     const { admin: adminB } = fixtures.companyB;
@@ -399,6 +446,8 @@ describe('Exchange offers — raise to the market (US1)', () => {
       .get('/api/v1/fuel-exchange/offers/summary')
       .set('Authorization', `Bearer ${adminA.token}`)
       .expect(200);
-    expect(summaryAfterBackdate.body.awardedThisMonth).toBe(summaryAfterAward.body.awardedThisMonth - 1);
+    expect(summaryAfterBackdate.body.awardedThisMonth).toBe(
+      summaryAfterAward.body.awardedThisMonth - 1,
+    );
   });
 });

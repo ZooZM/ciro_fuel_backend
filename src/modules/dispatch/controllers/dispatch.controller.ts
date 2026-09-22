@@ -31,9 +31,7 @@ export class DispatchController {
     const candidates = await this.dispatchService.getCandidates(id);
     return candidates.map((candidate) => ({
       ...candidate,
-      suggestedTruck: candidate.suggestedTruck
-        ? toSafeTruckShape(candidate.suggestedTruck)
-        : null,
+      suggestedTruck: candidate.suggestedTruck ? toSafeTruckShape(candidate.suggestedTruck) : null,
     }));
   }
 

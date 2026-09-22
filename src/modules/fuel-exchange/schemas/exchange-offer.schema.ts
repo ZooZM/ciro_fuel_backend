@@ -63,7 +63,12 @@ export class ExchangeOffer {
   @Prop({ trim: true, maxlength: 1000 })
   notes?: string;
 
-  @Prop({ type: String, required: true, enum: ExchangeOfferState, default: ExchangeOfferState.OPEN })
+  @Prop({
+    type: String,
+    required: true,
+    enum: ExchangeOfferState,
+    default: ExchangeOfferState.OPEN,
+  })
   state!: ExchangeOfferState;
 
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'ExchangeProposal' })

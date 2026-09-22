@@ -8,7 +8,9 @@ import {
   DEFAULT_PASSWORD,
   seedTwoCompanies,
   TwoCompanyFixture,
-  uniquePhone, settleClientReview } from '../utils/fixtures';
+  uniquePhone,
+  settleClientReview,
+} from '../utils/fixtures';
 import { UsersService } from '../../src/modules/users/users.service';
 import { AuthService } from '../../src/modules/auth/auth.service';
 import { TrucksService } from '../../src/modules/trucks/trucks.service';

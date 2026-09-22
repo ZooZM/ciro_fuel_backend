@@ -27,7 +27,6 @@ export enum NotificationType {
   ORDER_DRIVER_BLOCKED = 'ORDER_DRIVER_BLOCKED',
   ORDER_STOP_UNRESOLVED = 'ORDER_STOP_UNRESOLVED',
 
-
   // spec 013 (fuel company admin dashboard) FR-030 — to the CLIENT (station owner):
   // the outcome of their credit-limit request. Payload carries `accepted` and
   // `grantedAmount` (present only when accepted). One of the two client-facing

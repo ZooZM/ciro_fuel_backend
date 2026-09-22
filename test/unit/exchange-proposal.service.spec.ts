@@ -2,8 +2,16 @@ import mongoose, { Connection } from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { FuelExchangeService } from '../../src/modules/fuel-exchange/fuel-exchange.service';
-import { ExchangeOffer, ExchangeOfferSchema, ExchangeOfferDocument } from '../../src/modules/fuel-exchange/schemas/exchange-offer.schema';
-import { ExchangeProposal, ExchangeProposalSchema, ExchangeProposalDocument } from '../../src/modules/fuel-exchange/schemas/exchange-proposal.schema';
+import {
+  ExchangeOffer,
+  ExchangeOfferSchema,
+  ExchangeOfferDocument,
+} from '../../src/modules/fuel-exchange/schemas/exchange-offer.schema';
+import {
+  ExchangeProposal,
+  ExchangeProposalSchema,
+  ExchangeProposalDocument,
+} from '../../src/modules/fuel-exchange/schemas/exchange-proposal.schema';
 import { User, UserSchema, UserDocument } from '../../src/modules/users/schemas/user.schema';
 import { CompaniesService } from '../../src/modules/companies/companies.service';
 import { NotificationsService } from '../../src/modules/notifications/notifications.service';
@@ -26,7 +34,16 @@ describe('FuelExchangeService.propose', () => {
   let offerModel: mongoose.Model<ExchangeOfferDocument>;
   let proposalModel: mongoose.Model<ExchangeProposalDocument>;
   let userModel: mongoose.Model<UserDocument>;
-  let companiesService: jest.Mocked<Pick<CompaniesService, 'findActiveFuelCompaniesSellingGrade' | 'findSuspendedFuelCompanyIds' | 'findById' | 'isActive' | 'getBasePrice'>>;
+  let companiesService: jest.Mocked<
+    Pick<
+      CompaniesService,
+      | 'findActiveFuelCompaniesSellingGrade'
+      | 'findSuspendedFuelCompanyIds'
+      | 'findById'
+      | 'isActive'
+      | 'getBasePrice'
+    >
+  >;
   let notificationsService: jest.Mocked<Pick<NotificationsService, 'notify'>>;
   let service: FuelExchangeService;
 
@@ -51,7 +68,12 @@ describe('FuelExchangeService.propose', () => {
     companiesService = {
       findActiveFuelCompaniesSellingGrade: jest.fn().mockResolvedValue([]),
       findSuspendedFuelCompanyIds: jest.fn().mockResolvedValue([]),
-      findById: jest.fn().mockResolvedValue({ name: 'Co', fuelPrices: [], contactEmail: 'x@x.com', contactPhone: '+9665' } as never),
+      findById: jest.fn().mockResolvedValue({
+        name: 'Co',
+        fuelPrices: [],
+        contactEmail: 'x@x.com',
+        contactPhone: '+9665',
+      } as never),
       isActive: jest.fn().mockResolvedValue(true),
       getBasePrice: jest.fn().mockResolvedValue(2.2),
     } as never;
@@ -90,7 +112,9 @@ describe('FuelExchangeService.propose', () => {
   it('refuses EXCHANGE_GRADE_NOT_SOLD when the proposing company does not sell the grade (research R2)', async () => {
     const offer = await seedOpenOffer();
     companiesService.getBasePrice.mockResolvedValueOnce(undefined);
-    await expect(service.propose(String(offer._id), companyB, userB, { unitPrice: 2.5 })).rejects.toMatchObject({
+    await expect(
+      service.propose(String(offer._id), companyB, userB, { unitPrice: 2.5 }),
+    ).rejects.toMatchObject({
       response: { error: ErrorCode.EXCHANGE_GRADE_NOT_SOLD },
     });
   });
@@ -104,7 +128,9 @@ describe('FuelExchangeService.propose', () => {
 
   it('refuses when neither unitPrice nor decline is given', async () => {
     const offer = await seedOpenOffer();
-    await expect(service.propose(String(offer._id), companyB, userB, {})).rejects.toThrow(BadRequestException);
+    await expect(service.propose(String(offer._id), companyB, userB, {})).rejects.toThrow(
+      BadRequestException,
+    );
   });
 
   it('records a decline with no price and no currency (FR-013)', async () => {
@@ -124,15 +150,19 @@ describe('FuelExchangeService.propose', () => {
 
   it('403s the raiser attempting to answer its own offer (FR-009)', async () => {
     const offer = await seedOpenOffer();
-    await expect(service.propose(String(offer._id), companyA, userB, { unitPrice: 2.5 })).rejects.toThrow(
-      ForbiddenException,
-    );
+    await expect(
+      service.propose(String(offer._id), companyA, userB, { unitPrice: 2.5 }),
+    ).rejects.toThrow(ForbiddenException);
   });
 
   it('409s EXCHANGE_OFFER_NOT_OPEN when the offer is not OPEN', async () => {
     const offer = await seedOpenOffer();
-    await offerModel.updateOne({ _id: offer._id }, { $set: { state: ExchangeOfferState.WITHDRAWN } }).exec();
-    await expect(service.propose(String(offer._id), companyB, userB, { unitPrice: 2.5 })).rejects.toMatchObject({
+    await offerModel
+      .updateOne({ _id: offer._id }, { $set: { state: ExchangeOfferState.WITHDRAWN } })
+      .exec();
+    await expect(
+      service.propose(String(offer._id), companyB, userB, { unitPrice: 2.5 }),
+    ).rejects.toMatchObject({
       response: { error: ErrorCode.EXCHANGE_OFFER_NOT_OPEN },
     });
   });
@@ -140,7 +170,9 @@ describe('FuelExchangeService.propose', () => {
   it('409s EXCHANGE_OFFER_NOT_OPEN when the raising company is suspended (research R13)', async () => {
     const offer = await seedOpenOffer();
     companiesService.isActive.mockResolvedValueOnce(false);
-    await expect(service.propose(String(offer._id), companyB, userB, { unitPrice: 2.5 })).rejects.toMatchObject({
+    await expect(
+      service.propose(String(offer._id), companyB, userB, { unitPrice: 2.5 }),
+    ).rejects.toMatchObject({
       response: { error: ErrorCode.EXCHANGE_OFFER_NOT_OPEN },
     });
   });
@@ -148,15 +180,17 @@ describe('FuelExchangeService.propose', () => {
   it('translates a duplicate submission into EXCHANGE_ALREADY_ANSWERED, never a 500 (T050/FR-011c/FR-018)', async () => {
     const offer = await seedOpenOffer();
     await service.propose(String(offer._id), companyB, userB, { unitPrice: 2.5 });
-    await expect(service.propose(String(offer._id), companyB, userB, { unitPrice: 2.6 })).rejects.toMatchObject({
+    await expect(
+      service.propose(String(offer._id), companyB, userB, { unitPrice: 2.6 }),
+    ).rejects.toMatchObject({
       response: { error: ErrorCode.EXCHANGE_ALREADY_ANSWERED },
     });
-    await expect(service.propose(String(offer._id), companyB, userB, { unitPrice: 2.5 })).rejects.toBeInstanceOf(
-      ConflictException,
-    );
+    await expect(
+      service.propose(String(offer._id), companyB, userB, { unitPrice: 2.5 }),
+    ).rejects.toBeInstanceOf(ConflictException);
   });
 
-  it('notifies the RAISING company\'s admins, a different tenant from the proposer (T053/T056a)', async () => {
+  it("notifies the RAISING company's admins, a different tenant from the proposer (T053/T056a)", async () => {
     const offer = await seedOpenOffer();
     await userModel.create({
       companyId: new mongoose.Types.ObjectId(companyA),

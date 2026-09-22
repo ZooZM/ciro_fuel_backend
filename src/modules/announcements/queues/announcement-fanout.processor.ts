@@ -1,17 +1,17 @@
 import { Logger, OnModuleInit } from '@nestjs/common';
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model, Types } from 'mongoose';
+import { Model } from 'mongoose';
 import { Job } from 'bullmq';
-import {
-  Announcement,
-  AnnouncementDocument,
-} from '../schemas/announcement.schema';
+import { Announcement, AnnouncementDocument } from '../schemas/announcement.schema';
 import {
   AnnouncementDelivery,
   AnnouncementDeliveryDocument,
 } from '../schemas/announcement-delivery.schema';
-import { Notification, NotificationDocument } from '../../notifications/schemas/notification.schema';
+import {
+  Notification,
+  NotificationDocument,
+} from '../../notifications/schemas/notification.schema';
 import { AnnouncementCandidate, AnnouncementsService } from '../announcements.service';
 import { ANNOUNCEMENT_FANOUT_QUEUE } from './announcement-fanout.queue';
 import { AnnouncementState } from '../../../common/enums/announcement-state.enum';
@@ -179,7 +179,10 @@ export class AnnouncementFanoutProcessor extends WorkerHost implements OnModuleI
         // cleanly. Best-effort: if the remove also fails there is nothing
         // further this worker can do, and the original error is the one worth
         // propagating.
-        await this.deliveryModel.deleteOne({ _id: delivery._id }).exec().catch(() => undefined);
+        await this.deliveryModel
+          .deleteOne({ _id: delivery._id })
+          .exec()
+          .catch(() => undefined);
         throw notificationError;
       }
 

@@ -22,9 +22,7 @@ export function parseEnumQuery<T extends Record<string, string>>(
   if (value === undefined || value === '') return undefined;
   const values = Object.values(allowed) as string[];
   if (!values.includes(value)) {
-    throw new BadRequestException(
-      `${parameterName} must be one of: ${values.join(', ')}`,
-    );
+    throw new BadRequestException(`${parameterName} must be one of: ${values.join(', ')}`);
   }
   return value as T[keyof T];
 }

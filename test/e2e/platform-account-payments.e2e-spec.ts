@@ -4,7 +4,10 @@ import { getModelToken } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { createTestApp, TestAppContext } from '../utils/test-app.factory';
 import { seedTwoCompanies, TwoCompanyFixture } from '../utils/fixtures';
-import { AccountMovement, AccountMovementDocument } from '../../src/modules/platform-account/schemas/account-movement.schema';
+import {
+  AccountMovement,
+  AccountMovementDocument,
+} from '../../src/modules/platform-account/schemas/account-movement.schema';
 
 jest.setTimeout(120_000);
 
@@ -190,7 +193,10 @@ describe('Platform account payments (US10, FR-065/067/068/069/070/071/072)', () 
         reference: `pagination-${i}`,
       });
       await movementModel
-        .updateOne({ _id: movement._id }, { $set: { createdAt: new Date(2026, 0, 1, 10, i, 0, 0) } })
+        .updateOne(
+          { _id: movement._id },
+          { $set: { createdAt: new Date(2026, 0, 1, 10, i, 0, 0) } },
+        )
         .exec();
       expectedIds.push(String(movement._id));
     }

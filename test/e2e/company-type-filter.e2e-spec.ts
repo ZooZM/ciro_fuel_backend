@@ -56,9 +56,7 @@ describe('GET /companies honours type and status (US2)', () => {
     it('type=TRANSPORT returns exactly the transport companies', async () => {
       const res = await list(fixtures.superAdmin.token, '?type=TRANSPORT').expect(200);
       expect(res.body).toHaveLength(TRANSPORT_COUNT);
-      expect(res.body.every((c: { type: string }) => c.type === CompanyType.TRANSPORT)).toBe(
-        true,
-      );
+      expect(res.body.every((c: { type: string }) => c.type === CompanyType.TRANSPORT)).toBe(true);
     });
 
     it('no type returns every company — never a silent default (FR-011)', async () => {
@@ -129,9 +127,9 @@ describe('GET /companies honours type and status (US2)', () => {
     it('status=ACTIVE excludes it', async () => {
       const res = await list(fixtures.superAdmin.token, '?status=ACTIVE').expect(200);
       expect(res.body).toHaveLength(FUEL_COUNT + TRANSPORT_COUNT - 1);
-      expect(
-        res.body.some((c: { _id: string }) => String(c._id) === suspendedCompanyId),
-      ).toBe(false);
+      expect(res.body.some((c: { _id: string }) => String(c._id) === suspendedCompanyId)).toBe(
+        false,
+      );
     });
 
     it('combines with type — both narrowings intersect', async () => {

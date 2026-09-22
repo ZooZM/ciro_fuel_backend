@@ -60,12 +60,7 @@ export class DriverRosterService {
       Object.assign(query, dutyStateFilter(filter.dutyState));
     }
 
-    const page = await paginate(
-      this.userModel,
-      query,
-      DRIVER_ROSTER_SORT_KEYS,
-      filter.cursor,
-    );
+    const page = await paginate(this.userModel, query, DRIVER_ROSTER_SORT_KEYS, filter.cursor);
 
     const driverIds = page.items.map((driver) => String(driver._id));
     // Two batched lookups for the whole page, never one per row.
@@ -95,9 +90,7 @@ export class DriverRosterService {
   }
 
   /** One query for the whole page's employers (T085). */
-  private async resolveCompanyNames(
-    drivers: UserDocument[],
-  ): Promise<Map<string, string>> {
+  private async resolveCompanyNames(drivers: UserDocument[]): Promise<Map<string, string>> {
     const ids = [
       ...new Set(
         drivers
@@ -160,9 +153,7 @@ export class DriverRosterService {
       .find({ _id: { $in: rows.map((row) => row.truckId) } })
       .select({ plateNumber: 1 })
       .exec();
-    const plates = new Map(
-      trucks.map((truck) => [String(truck._id), truck.plateNumber]),
-    );
+    const plates = new Map(trucks.map((truck) => [String(truck._id), truck.plateNumber]));
 
     const byDriver = new Map<string, { id: string; plateNumber: string }>();
     for (const row of rows) {

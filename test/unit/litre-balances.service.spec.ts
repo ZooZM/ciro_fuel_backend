@@ -102,9 +102,27 @@ describe('LitreBalancesService', () => {
   it('a retried reconciliation for the same order is refused, never applying a second movement (FR-073e)', async () => {
     const orderId = new mongoose.Types.ObjectId().toString();
     const actorId = new mongoose.Types.ObjectId().toString();
-    await service.recordReconciliation(companyId, clientId, FuelType.DIESEL, orderId, 500, 400, actorId, undefined as never);
+    await service.recordReconciliation(
+      companyId,
+      clientId,
+      FuelType.DIESEL,
+      orderId,
+      500,
+      400,
+      actorId,
+      undefined as never,
+    );
     await expect(
-      service.recordReconciliation(companyId, clientId, FuelType.DIESEL, orderId, 500, 400, actorId, undefined as never),
+      service.recordReconciliation(
+        companyId,
+        clientId,
+        FuelType.DIESEL,
+        orderId,
+        500,
+        400,
+        actorId,
+        undefined as never,
+      ),
     ).rejects.toThrow(ConflictException);
     const balance = await service.getBalanceLitres(companyId, clientId, FuelType.DIESEL);
     expect(balance).toBe(100);
@@ -154,7 +172,15 @@ describe('LitreBalancesService', () => {
   it('drawdown against a zero/absent balance draws nothing', async () => {
     const actorId = new mongoose.Types.ObjectId().toString();
     const orderId = new mongoose.Types.ObjectId().toString();
-    const result = await service.drawdown(companyId, clientId, FuelType.DIESEL, orderId, 100, actorId, undefined as never);
+    const result = await service.drawdown(
+      companyId,
+      clientId,
+      FuelType.DIESEL,
+      orderId,
+      100,
+      actorId,
+      undefined as never,
+    );
     expect(result.litresDrawn).toBe(0);
     expect(result.balanceRemaining).toBe(0);
   });
@@ -162,7 +188,16 @@ describe('LitreBalancesService', () => {
   it('projectDrawdown reports what a real drawdown would do without writing anything', async () => {
     const actorId = new mongoose.Types.ObjectId().toString();
     const orderId = new mongoose.Types.ObjectId().toString();
-    await service.recordReconciliation(companyId, clientId, FuelType.DIESEL, orderId, 300, 250, actorId, undefined as never); // +50
+    await service.recordReconciliation(
+      companyId,
+      clientId,
+      FuelType.DIESEL,
+      orderId,
+      300,
+      250,
+      actorId,
+      undefined as never,
+    ); // +50
 
     const projection = await service.projectDrawdown(companyId, clientId, FuelType.DIESEL, 1000);
     expect(projection.litresDrawn).toBe(50);
@@ -188,14 +223,23 @@ describe('LitreBalancesService', () => {
     void balance;
     const balanceDoc = await service.listForCompany();
     const id = String(balanceDoc[0]._id);
-    await expect(service.recordCorrection(id, 10, '', actorId)).rejects.toThrow(BadRequestException);
-    await expect(service.recordCorrection(id, 10, '   ', actorId)).rejects.toThrow(BadRequestException);
+    await expect(service.recordCorrection(id, 10, '', actorId)).rejects.toThrow(
+      BadRequestException,
+    );
+    await expect(service.recordCorrection(id, 10, '   ', actorId)).rejects.toThrow(
+      BadRequestException,
+    );
   });
 
   it('a correction against a non-existent balance is a 404', async () => {
     const actorId = new mongoose.Types.ObjectId().toString();
     await expect(
-      service.recordCorrection(new mongoose.Types.ObjectId().toString(), 10, 'test reason', actorId),
+      service.recordCorrection(
+        new mongoose.Types.ObjectId().toString(),
+        10,
+        'test reason',
+        actorId,
+      ),
     ).rejects.toThrow(NotFoundException);
   });
 
@@ -203,12 +247,28 @@ describe('LitreBalancesService', () => {
     const actorId = new mongoose.Types.ObjectId().toString();
     const adminId = new mongoose.Types.ObjectId().toString();
     const orderId = new mongoose.Types.ObjectId().toString();
-    await service.recordReconciliation(companyId, clientId, FuelType.DIESEL, orderId, 100, 50, actorId, undefined as never); // +50
+    await service.recordReconciliation(
+      companyId,
+      clientId,
+      FuelType.DIESEL,
+      orderId,
+      100,
+      50,
+      actorId,
+      undefined as never,
+    ); // +50
 
     const balances = await service.listForCompany();
-    const target = balances.find((b) => String(b.companyId) === companyId && String(b.clientId) === clientId)!;
+    const target = balances.find(
+      (b) => String(b.companyId) === companyId && String(b.clientId) === clientId,
+    )!;
 
-    const corrected = await service.recordCorrection(String(target._id), -20, 'manual adjustment', adminId);
+    const corrected = await service.recordCorrection(
+      String(target._id),
+      -20,
+      'manual adjustment',
+      adminId,
+    );
     expect(corrected.balanceLitres).toBe(30);
     const correctionMovement = corrected.movements.find((m) => m.kind === 'CORRECTION');
     expect(correctionMovement!.litres).toBe(-20);
@@ -231,15 +291,37 @@ describe('LitreBalancesService', () => {
     ); // +100
 
     const drawOrderId = new mongoose.Types.ObjectId().toString();
-    await service.drawdown(companyId, clientId, FuelType.DIESEL, drawOrderId, 40, actorId, undefined as never);
+    await service.drawdown(
+      companyId,
+      clientId,
+      FuelType.DIESEL,
+      drawOrderId,
+      40,
+      actorId,
+      undefined as never,
+    );
     expect(await service.getBalanceLitres(companyId, clientId, FuelType.DIESEL)).toBe(60);
 
-    await service.returnDrawdown(companyId, clientId, FuelType.DIESEL, drawOrderId, actorId, undefined as never);
+    await service.returnDrawdown(
+      companyId,
+      clientId,
+      FuelType.DIESEL,
+      drawOrderId,
+      actorId,
+      undefined as never,
+    );
     expect(await service.getBalanceLitres(companyId, clientId, FuelType.DIESEL)).toBe(100);
 
     // No-op: an order that never drew anything down.
     const untouchedOrderId = new mongoose.Types.ObjectId().toString();
-    await service.returnDrawdown(companyId, clientId, FuelType.DIESEL, untouchedOrderId, actorId, undefined as never);
+    await service.returnDrawdown(
+      companyId,
+      clientId,
+      FuelType.DIESEL,
+      untouchedOrderId,
+      actorId,
+      undefined as never,
+    );
     expect(await service.getBalanceLitres(companyId, clientId, FuelType.DIESEL)).toBe(100);
   });
 });

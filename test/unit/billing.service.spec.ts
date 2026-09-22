@@ -14,7 +14,11 @@ import {
   CashbackProgrammeSchema,
   CashbackProgrammeDocument,
 } from '../../src/modules/billing/schemas/cashback-programme.schema';
-import { Company, CompanySchema, CompanyDocument } from '../../src/modules/companies/schemas/company.schema';
+import {
+  Company,
+  CompanySchema,
+  CompanyDocument,
+} from '../../src/modules/companies/schemas/company.schema';
 import {
   AccountMovement,
   AccountMovementSchema,
@@ -57,14 +61,20 @@ describe('BillingService (non-transactional paths)', () => {
       CashbackProgramme.name,
       CashbackProgrammeSchema,
     ) as unknown as mongoose.Model<CashbackProgrammeDocument>;
-    companyModel = connection.model(Company.name, CompanySchema) as unknown as mongoose.Model<CompanyDocument>;
+    companyModel = connection.model(
+      Company.name,
+      CompanySchema,
+    ) as unknown as mongoose.Model<CompanyDocument>;
     const accountMovementModel = connection.model(
       AccountMovement.name,
       AccountMovementSchema,
     ) as unknown as mongoose.Model<AccountMovementDocument>;
 
     const platformAccountService = new PlatformAccountService(accountMovementModel);
-    const config = { get: (key: string) => (key === 'billing.defaultCommissionCeiling' ? DEFAULT_CEILING : undefined) };
+    const config = {
+      get: (key: string) =>
+        key === 'billing.defaultCommissionCeiling' ? DEFAULT_CEILING : undefined,
+    };
     service = new BillingService(
       commissionTermModel,
       cashbackProgrammeModel,
@@ -217,7 +227,9 @@ describe('BillingService (non-transactional paths)', () => {
       await companyModel.updateOne({ _id: companyId }, { $set: { commissionCeiling: 42 } }).exec();
       const balances = await service.getBalancesForCompany(companyId);
       expect(balances.commissionCeiling).toBe(42);
-      await companyModel.updateOne({ _id: companyId }, { $unset: { commissionCeiling: '' } }).exec();
+      await companyModel
+        .updateOne({ _id: companyId }, { $unset: { commissionCeiling: '' } })
+        .exec();
     });
 
     it('assertUnderCeiling refuses once the net commission owed exceeds the ceiling', async () => {

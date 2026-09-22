@@ -83,7 +83,7 @@ describe('proposalScopePlugin', () => {
     );
   });
 
-  it('a proposer reads only its OWN proposal, never the rival\'s', async () => {
+  it("a proposer reads only its OWN proposal, never the rival's", async () => {
     await tenantContext.run(
       { userId: 'admin-b', role: UserRole.FUEL_COMPANY_ADMIN, companyId: FUEL_CO_B },
       async () => {

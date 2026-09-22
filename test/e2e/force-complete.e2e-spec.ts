@@ -8,7 +8,9 @@ import {
   seedTwoCompanies,
   TwoCompanyFixture,
   assignAndDepart,
-  resetFixtureDispatchState, settleClientReview } from '../utils/fixtures';
+  resetFixtureDispatchState,
+  settleClientReview,
+} from '../utils/fixtures';
 import { User, UserDocument } from '../../src/modules/users/schemas/user.schema';
 import { Truck, TruckDocument } from '../../src/modules/trucks/schemas/truck.schema';
 import { Tank, TankDocument } from '../../src/modules/tanks/schemas/tank.schema';

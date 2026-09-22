@@ -8,7 +8,9 @@ import {
   DEFAULT_WAREHOUSE_LOCATION,
   resetFixtureDispatchState,
   seedTwoCompanies,
-  TwoCompanyFixture, settleClientReview } from '../utils/fixtures';
+  TwoCompanyFixture,
+  settleClientReview,
+} from '../utils/fixtures';
 import { AuthService } from '../../src/modules/auth/auth.service';
 import { TrucksService } from '../../src/modules/trucks/trucks.service';
 import { OrderStatus } from '../../src/common/enums/order-status.enum';

@@ -28,7 +28,7 @@ describe('Fuel price changes do not alter orders already placed (FR-039)', () =>
     await ctx.close();
   }, 30_000);
 
-  it('leaves a pre-existing order\'s estimatedPrice untouched after the grade price changes, while a new order picks up the new price', async () => {
+  it("leaves a pre-existing order's estimatedPrice untouched after the grade price changes, while a new order picks up the new price", async () => {
     const server = app.getHttpServer();
     const { admin, client, companyId } = fixtures.companyA;
 
@@ -38,8 +38,7 @@ describe('Fuel price changes do not alter orders already placed (FR-039)', () =>
     // total rather than the bare fuel line it used to be. Expressed as a
     // function of the unit price, because what this test is about is which
     // PRICE applies, not what the surrounding fees happen to be.
-    const pricedAt = (unitPrice: number) =>
-      Math.round(unitPrice * 500 * 1.01 * 1.15 * 100) / 100;
+    const pricedAt = (unitPrice: number) => Math.round(unitPrice * 500 * 1.01 * 1.15 * 100) / 100;
 
     const before = await request(server)
       .post('/api/v1/orders')

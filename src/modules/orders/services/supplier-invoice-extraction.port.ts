@@ -20,5 +20,8 @@ export interface ExtractedSupplierInvoiceFields {
  * all, with zero change to the confirm/reconcile path either way.
  */
 export abstract class SupplierInvoiceExtractionPort {
-  abstract extract(params: { buffer: Buffer; mimeType: string }): Promise<ExtractedSupplierInvoiceFields>;
+  abstract extract(params: {
+    buffer: Buffer;
+    mimeType: string;
+  }): Promise<ExtractedSupplierInvoiceFields>;
 }

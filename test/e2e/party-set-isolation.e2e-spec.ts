@@ -4,7 +4,10 @@ import { Model, Types } from 'mongoose';
 import { createTestApp, TestAppContext } from '../utils/test-app.factory';
 import { seedTwoCompanies, TwoCompanyFixture } from '../utils/fixtures';
 import { TenantContextService } from '../../src/common/context/tenant-context.service';
-import { ExchangeRequest, ExchangeRequestDocument } from '../../src/modules/fuel-exchange/schemas/exchange-request.schema';
+import {
+  ExchangeRequest,
+  ExchangeRequestDocument,
+} from '../../src/modules/fuel-exchange/schemas/exchange-request.schema';
 import { UserRole } from '../../src/common/enums/user-role.enum';
 
 jest.setTimeout(120_000);
@@ -67,19 +70,25 @@ describe('Party-set isolation (US12 Part A gate, research R3)', () => {
   it('THE recipient reads a request raised by the counterparty (non-negotiable)', async () => {
     await createAsCompanyA();
     const { admin, companyId } = fixtures.companyB;
-    await tenantContext.run({ userId: admin.id, role: UserRole.FUEL_COMPANY_ADMIN, companyId }, async () => {
-      const results = await model.find({});
-      expect(results).toHaveLength(1);
-    });
+    await tenantContext.run(
+      { userId: admin.id, role: UserRole.FUEL_COMPANY_ADMIN, companyId },
+      async () => {
+        const results = await model.find({});
+        expect(results).toHaveLength(1);
+      },
+    );
   });
 
   it('the raiser reads their own', async () => {
     await createAsCompanyA();
     const { admin, companyId } = fixtures.companyA;
-    await tenantContext.run({ userId: admin.id, role: UserRole.FUEL_COMPANY_ADMIN, companyId }, async () => {
-      const results = await model.find({});
-      expect(results).toHaveLength(1);
-    });
+    await tenantContext.run(
+      { userId: admin.id, role: UserRole.FUEL_COMPANY_ADMIN, companyId },
+      async () => {
+        const results = await model.find({});
+        expect(results).toHaveLength(1);
+      },
+    );
   });
 
   it('a third fuel company reads neither', async () => {
@@ -103,7 +112,10 @@ describe('Party-set isolation (US12 Part A gate, research R3)', () => {
     await expect(
       tenantContext.run(
         { userId: outsiderUserId, role: UserRole.FUEL_COMPANY_ADMIN, companyId: outsiderCompanyId },
-        () => model.create(fields(fixtures.companyA.companyId, fixtures.companyB.companyId, outsiderUserId)),
+        () =>
+          model.create(
+            fields(fixtures.companyA.companyId, fixtures.companyB.companyId, outsiderUserId),
+          ),
       ),
     ).rejects.toThrow();
   });
@@ -112,7 +124,10 @@ describe('Party-set isolation (US12 Part A gate, research R3)', () => {
     const { admin, companyId } = fixtures.companyA;
     await expect(
       tenantContext.run({ userId: admin.id, role: UserRole.FUEL_COMPANY_ADMIN, companyId }, () =>
-        model.create({ ...fields(companyId, fixtures.companyB.companyId, admin.id), partyCompanyIds: [new Types.ObjectId(companyId)] }),
+        model.create({
+          ...fields(companyId, fixtures.companyB.companyId, admin.id),
+          partyCompanyIds: [new Types.ObjectId(companyId)],
+        }),
       ),
     ).rejects.toThrow();
   });
@@ -123,9 +138,11 @@ describe('Party-set isolation (US12 Part A gate, research R3)', () => {
       tenantContext.run({ userId: admin.id, role: UserRole.FUEL_COMPANY_ADMIN, companyId }, () =>
         model.create({
           ...fields(companyId, fixtures.companyB.companyId, admin.id),
-          partyCompanyIds: [companyId, fixtures.companyB.companyId, new Types.ObjectId().toString()].map(
-            (p) => new Types.ObjectId(p),
-          ),
+          partyCompanyIds: [
+            companyId,
+            fixtures.companyB.companyId,
+            new Types.ObjectId().toString(),
+          ].map((p) => new Types.ObjectId(p)),
         }),
       ),
     ).rejects.toThrow();
@@ -133,10 +150,13 @@ describe('Party-set isolation (US12 Part A gate, research R3)', () => {
 
   it('SUPER_ADMIN reads all', async () => {
     await createAsCompanyA();
-    await tenantContext.run({ userId: fixtures.superAdmin.id, role: UserRole.SUPER_ADMIN }, async () => {
-      const results = await model.find({});
-      expect(results).toHaveLength(1);
-    });
+    await tenantContext.run(
+      { userId: fixtures.superAdmin.id, role: UserRole.SUPER_ADMIN },
+      async () => {
+        const results = await model.find({});
+        expect(results).toHaveLength(1);
+      },
+    );
   });
 
   it('anonymous/public-route traffic bypasses without throwing', async () => {

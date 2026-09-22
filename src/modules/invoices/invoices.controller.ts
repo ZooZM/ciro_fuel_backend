@@ -13,7 +13,12 @@ import { ObjectIdPipe } from '../../common/pipes/object-id.pipe';
 export class InvoicesController {
   constructor(private readonly invoicesService: InvoicesService) {}
 
-  @Roles(UserRole.FUEL_COMPANY_ADMIN, UserRole.TRANSPORT_COMPANY_ADMIN, UserRole.CLIENT, UserRole.SUPER_ADMIN)
+  @Roles(
+    UserRole.FUEL_COMPANY_ADMIN,
+    UserRole.TRANSPORT_COMPANY_ADMIN,
+    UserRole.CLIENT,
+    UserRole.SUPER_ADMIN,
+  )
   @Get()
   findMine(
     @Query('method') method?: PaymentMethod,

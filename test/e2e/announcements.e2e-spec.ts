@@ -129,10 +129,7 @@ describe('Platform announcements reach every company administrator (US6)', () =>
     });
 
     it('the transport company administrator can read it too', async () => {
-      const mine = await announcementsFor(
-        fixtures.companyA.transportAdmin.token,
-        announcementId,
-      );
+      const mine = await announcementsFor(fixtures.companyA.transportAdmin.token, announcementId);
       expect(mine).toHaveLength(1);
     });
 
@@ -268,10 +265,7 @@ describe('Platform announcements reach every company administrator (US6)', () =>
       deactivatedAdminId = fixtures.companyA.admin.id;
       await connection
         .collection('users')
-        .updateOne(
-          { _id: new Types.ObjectId(deactivatedAdminId) },
-          { $set: { isActive: false } },
-        );
+        .updateOne({ _id: new Types.ObjectId(deactivatedAdminId) }, { $set: { isActive: false } });
 
       const res = await send(fixtures.superAdmin.token, {
         title: 'Unreachable cases',
@@ -317,9 +311,7 @@ describe('Platform announcements reach every company administrator (US6)', () =>
       expect(row!.notificationId).toBeUndefined();
       // Two different unreachable causes, two different reasons. A boolean
       // `delivered: false` would collapse them into one shrug.
-      expect(row!.failureReason).not.toBe(
-        AnnouncementDeliveryFailureReason.COMPANY_SUSPENDED,
-      );
+      expect(row!.failureReason).not.toBe(AnnouncementDeliveryFailureReason.COMPANY_SUSPENDED);
     });
 
     it('neither is counted as delivered', async () => {
@@ -355,13 +347,11 @@ describe('Platform announcements reach every company administrator (US6)', () =>
      */
     it('a re-run does not duplicate the company-addressed NO_ACTIVE_ADMIN row (FR-053)', async () => {
       const noActiveAdminRows = () =>
-        connection
-          .collection('announcementdeliveries')
-          .countDocuments({
-            announcementId: new Types.ObjectId(announcementId),
-            failureReason: AnnouncementDeliveryFailureReason.NO_ACTIVE_ADMIN,
-            companyAddressed: true,
-          });
+        connection.collection('announcementdeliveries').countDocuments({
+          announcementId: new Types.ObjectId(announcementId),
+          failureReason: AnnouncementDeliveryFailureReason.NO_ACTIVE_ADMIN,
+          companyAddressed: true,
+        });
 
       const before = await noActiveAdminRows();
       expect(before).toBeGreaterThan(0);

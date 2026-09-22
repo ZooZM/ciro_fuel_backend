@@ -1,4 +1,10 @@
-import { BadRequestException, ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { ClientSession, Model, Types } from 'mongoose';
 import { LitreBalance, LitreBalanceDocument } from './schemas/litre-balance.schema';
@@ -89,7 +95,8 @@ export class LitreBalancesService {
     }
 
     const orderIdObj = new Types.ObjectId(orderId);
-    const kind = shortfallLitres > 0 ? LitreMovementKind.SHORTFALL_CREDIT : LitreMovementKind.EXCESS_DEBIT;
+    const kind =
+      shortfallLitres > 0 ? LitreMovementKind.SHORTFALL_CREDIT : LitreMovementKind.EXCESS_DEBIT;
 
     // Step 1: the balance document exists, idempotently — never touches movements.
     await this.balanceModel
@@ -108,7 +115,13 @@ export class LitreBalancesService {
         {
           $inc: { balanceLitres: shortfallLitres },
           $push: {
-            movements: { kind, litres: shortfallLitres, orderId: orderIdObj, actorId: new Types.ObjectId(actorId), at: new Date() },
+            movements: {
+              kind,
+              litres: shortfallLitres,
+              orderId: orderIdObj,
+              actorId: new Types.ObjectId(actorId),
+              at: new Date(),
+            },
             reconciledOrderIds: orderIdObj,
           },
         },
@@ -151,7 +164,8 @@ export class LitreBalancesService {
       (m) =>
         m.orderId &&
         String(m.orderId) === String(orderIdObj) &&
-        (m.kind === LitreMovementKind.SHORTFALL_CREDIT || m.kind === LitreMovementKind.EXCESS_DEBIT),
+        (m.kind === LitreMovementKind.SHORTFALL_CREDIT ||
+          m.kind === LitreMovementKind.EXCESS_DEBIT),
     );
 
     if (priorMovement) {
@@ -167,7 +181,16 @@ export class LitreBalancesService {
         .exec();
     }
 
-    return this.recordReconciliation(companyId, clientId, fuelType, orderId, orderedLitres, suppliedLitres, actorId, session);
+    return this.recordReconciliation(
+      companyId,
+      clientId,
+      fuelType,
+      orderId,
+      orderedLitres,
+      suppliedLitres,
+      actorId,
+      session,
+    );
   }
 
   /**
@@ -260,12 +283,18 @@ export class LitreBalancesService {
     if (!balance) return;
 
     const alreadyReturned = balance.movements.some(
-      (m) => m.orderId && String(m.orderId) === String(orderIdObj) && m.kind === LitreMovementKind.DRAWDOWN_RETURNED,
+      (m) =>
+        m.orderId &&
+        String(m.orderId) === String(orderIdObj) &&
+        m.kind === LitreMovementKind.DRAWDOWN_RETURNED,
     );
     if (alreadyReturned) return;
 
     const drawdown = balance.movements.find(
-      (m) => m.orderId && String(m.orderId) === String(orderIdObj) && m.kind === LitreMovementKind.ORDER_DRAWDOWN,
+      (m) =>
+        m.orderId &&
+        String(m.orderId) === String(orderIdObj) &&
+        m.kind === LitreMovementKind.ORDER_DRAWDOWN,
     );
     if (!drawdown) return;
 
@@ -345,6 +374,9 @@ export class LitreBalancesService {
 
   /** T198 — the station owner's own balances, movements included (FR-075a, FR-076). */
   listForClient(clientId: string): Promise<LitreBalanceDocument[]> {
-    return this.balanceModel.find({ clientId: new Types.ObjectId(clientId) }).sort({ fuelType: 1 }).exec();
+    return this.balanceModel
+      .find({ clientId: new Types.ObjectId(clientId) })
+      .sort({ fuelType: 1 })
+      .exec();
   }
 }

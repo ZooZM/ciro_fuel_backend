@@ -59,7 +59,10 @@ describe('PlatformAccountService (balance derivation)', () => {
       state: AccountMovementState.RECORDED,
     });
 
-    const balance = await service.getConfirmedBalance(freshCompany, AccountMovementKind.PAYMENT_RECORDED);
+    const balance = await service.getConfirmedBalance(
+      freshCompany,
+      AccountMovementKind.PAYMENT_RECORDED,
+    );
     expect(balance).toBe(100);
   });
 
@@ -81,13 +84,20 @@ describe('PlatformAccountService (balance derivation)', () => {
       reversalOfId: original._id as mongoose.Types.ObjectId,
     });
 
-    const balance = await service.getConfirmedBalance(freshCompany, AccountMovementKind.COMMISSION_CHARGED);
+    const balance = await service.getConfirmedBalance(
+      freshCompany,
+      AccountMovementKind.COMMISSION_CHARGED,
+    );
     expect(balance).toBe(0);
   });
 
   it('recordPayment refuses a payment with neither a reference nor a document (FR-067)', async () => {
     await expect(
-      service.recordPayment(companyId, { amount: 10, method: SettlementMethod.BANK_TRANSFER }, 'SAR'),
+      service.recordPayment(
+        companyId,
+        { amount: 10, method: SettlementMethod.BANK_TRANSFER },
+        'SAR',
+      ),
     ).rejects.toThrow(BadRequestException);
   });
 
@@ -98,7 +108,10 @@ describe('PlatformAccountService (balance derivation)', () => {
       'SAR',
     );
     expect(movement.state).toBe(AccountMovementState.RECORDED);
-    const balance = await service.getConfirmedBalance(companyId, AccountMovementKind.PAYMENT_RECORDED);
+    const balance = await service.getConfirmedBalance(
+      companyId,
+      AccountMovementKind.PAYMENT_RECORDED,
+    );
     expect(balance).toBe(0);
   });
 
@@ -115,11 +128,19 @@ describe('PlatformAccountService (balance derivation)', () => {
     expect(confirmed.state).toBe(AccountMovementState.CONFIRMED);
     expect(String(confirmed.confirmedBy)).toBe(confirmerId);
 
-    const balance = await service.getConfirmedBalance(freshCompany, AccountMovementKind.PAYMENT_RECORDED);
+    const balance = await service.getConfirmedBalance(
+      freshCompany,
+      AccountMovementKind.PAYMENT_RECORDED,
+    );
     expect(balance).toBe(75);
 
-    await expect(service.confirmPayment(String(movement._id), confirmerId)).rejects.toThrow(ConflictException);
-    const balanceAfterRetry = await service.getConfirmedBalance(freshCompany, AccountMovementKind.PAYMENT_RECORDED);
+    await expect(service.confirmPayment(String(movement._id), confirmerId)).rejects.toThrow(
+      ConflictException,
+    );
+    const balanceAfterRetry = await service.getConfirmedBalance(
+      freshCompany,
+      AccountMovementKind.PAYMENT_RECORDED,
+    );
     expect(balanceAfterRetry).toBe(75);
   });
 });

@@ -2,8 +2,16 @@ import mongoose, { Connection } from 'mongoose';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import { NotFoundException } from '@nestjs/common';
 import { FuelExchangeService } from '../../src/modules/fuel-exchange/fuel-exchange.service';
-import { ExchangeOffer, ExchangeOfferSchema, ExchangeOfferDocument } from '../../src/modules/fuel-exchange/schemas/exchange-offer.schema';
-import { ExchangeProposal, ExchangeProposalSchema, ExchangeProposalDocument } from '../../src/modules/fuel-exchange/schemas/exchange-proposal.schema';
+import {
+  ExchangeOffer,
+  ExchangeOfferSchema,
+  ExchangeOfferDocument,
+} from '../../src/modules/fuel-exchange/schemas/exchange-offer.schema';
+import {
+  ExchangeProposal,
+  ExchangeProposalSchema,
+  ExchangeProposalDocument,
+} from '../../src/modules/fuel-exchange/schemas/exchange-proposal.schema';
 import { User, UserSchema, UserDocument } from '../../src/modules/users/schemas/user.schema';
 import { CompaniesService } from '../../src/modules/companies/companies.service';
 import { NotificationsService } from '../../src/modules/notifications/notifications.service';
@@ -90,15 +98,20 @@ describe('FuelExchangeService.award (ownership refusals)', () => {
 
   it('404s when the offer does not exist', async () => {
     await expect(
-      service.award(new mongoose.Types.ObjectId().toString(), companyA, userA, new mongoose.Types.ObjectId().toString()),
+      service.award(
+        new mongoose.Types.ObjectId().toString(),
+        companyA,
+        userA,
+        new mongoose.Types.ObjectId().toString(),
+      ),
     ).rejects.toThrow(NotFoundException);
   });
 
   it('404s (never reveals the offer exists) when the caller did not raise it (T065)', async () => {
     const { offer, proposal } = await seedOfferWithProposal();
-    await expect(service.award(String(offer._id), companyC, userA, String(proposal._id))).rejects.toThrow(
-      NotFoundException,
-    );
+    await expect(
+      service.award(String(offer._id), companyC, userA, String(proposal._id)),
+    ).rejects.toThrow(NotFoundException);
   });
 
   it('404s when the named proposal does not belong to this offer', async () => {
@@ -110,9 +123,14 @@ describe('FuelExchangeService.award (ownership refusals)', () => {
 
   it('404s awarding a DECLINED proposal — nothing about a decline can be awarded', async () => {
     const { offer, proposal } = await seedOfferWithProposal();
-    await proposalModel.updateOne({ _id: proposal._id }, { $set: { outcome: ProposalOutcome.DECLINED, unitPrice: undefined } }).exec();
-    await expect(service.award(String(offer._id), companyA, userA, String(proposal._id))).rejects.toThrow(
-      NotFoundException,
-    );
+    await proposalModel
+      .updateOne(
+        { _id: proposal._id },
+        { $set: { outcome: ProposalOutcome.DECLINED, unitPrice: undefined } },
+      )
+      .exec();
+    await expect(
+      service.award(String(offer._id), companyA, userA, String(proposal._id)),
+    ).rejects.toThrow(NotFoundException);
   });
 });

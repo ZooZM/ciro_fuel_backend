@@ -56,7 +56,10 @@ export class SupplierInvoicesService {
       mimeType: file.mimeType,
       originalName: file.originalName,
     });
-    const extracted = await this.extractionPort.extract({ buffer: file.buffer, mimeType: file.mimeType });
+    const extracted = await this.extractionPort.extract({
+      buffer: file.buffer,
+      mimeType: file.mimeType,
+    });
     return {
       fileId: String(record._id),
       extracted: extracted as unknown as Record<string, unknown>,
@@ -73,7 +76,10 @@ export class SupplierInvoicesService {
     }
   }
 
-  private assertGradeMatches(order: OrderDocument, confirmed: ConfirmedSupplierInvoiceDataDto): void {
+  private assertGradeMatches(
+    order: OrderDocument,
+    confirmed: ConfirmedSupplierInvoiceDataDto,
+  ): void {
     if (confirmed.fuelType !== order.fuelType) {
       throw new BadRequestException({
         error: ErrorCode.SUPPLIER_INVOICE_GRADE_MISMATCH,
@@ -102,7 +108,8 @@ export class SupplierInvoicesService {
     if (this.currentEntry(order)) {
       throw new ConflictException({
         error: ErrorCode.SUPPLIER_INVOICE_ALREADY_RECORDED,
-        message: 'This order already has a confirmed supplier invoice — use the replace endpoint instead',
+        message:
+          'This order already has a confirmed supplier invoice — use the replace endpoint instead',
       });
     }
 

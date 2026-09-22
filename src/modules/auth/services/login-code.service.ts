@@ -194,9 +194,7 @@ export class LoginCodeService {
 
     if (result !== OtpVerifyResult.MATCH) {
       if (result === OtpVerifyResult.MISMATCH && record) {
-        await this.loginCodeModel
-          .updateOne({ _id: record._id }, { $inc: { attempts: 1 } })
-          .exec();
+        await this.loginCodeModel.updateOne({ _id: record._id }, { $inc: { attempts: 1 } }).exec();
       }
       // FR-025 — every non-match attempt feeds the cross-code accumulator,
       // which can cross `failThreshold` into a temporary block.

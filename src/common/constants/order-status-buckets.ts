@@ -33,9 +33,7 @@ export enum OrderStatusBucket {
   NEEDS_ATTENTION = 'NEEDS_ATTENTION',
 }
 
-export const ORDER_STATUS_BUCKETS: Readonly<
-  Record<OrderStatusBucket, readonly OrderStatus[]>
-> = {
+export const ORDER_STATUS_BUCKETS: Readonly<Record<OrderStatusBucket, readonly OrderStatus[]>> = {
   [OrderStatusBucket.NEW]: [
     OrderStatus.PENDING_APPROVAL,
     OrderStatus.APPROVED,
@@ -58,17 +56,13 @@ export const ORDER_STATUS_BUCKETS: Readonly<
  * The bucket a single state belongs to. Returns `undefined` only if the
  * mapping has stopped being total, which the exhaustiveness test forbids.
  */
-export function bucketForStatus(
-  status: OrderStatus,
-): OrderStatusBucket | undefined {
-  return (Object.keys(ORDER_STATUS_BUCKETS) as OrderStatusBucket[]).find(
-    (bucket) => ORDER_STATUS_BUCKETS[bucket].includes(status),
+export function bucketForStatus(status: OrderStatus): OrderStatusBucket | undefined {
+  return (Object.keys(ORDER_STATUS_BUCKETS) as OrderStatusBucket[]).find((bucket) =>
+    ORDER_STATUS_BUCKETS[bucket].includes(status),
   );
 }
 
 /** The states of one bucket, for a `status: { $in: [...] }` expansion. */
-export function statusesForBucket(
-  bucket: OrderStatusBucket,
-): readonly OrderStatus[] {
+export function statusesForBucket(bucket: OrderStatusBucket): readonly OrderStatus[] {
   return ORDER_STATUS_BUCKETS[bucket];
 }

@@ -292,7 +292,10 @@ export class CompaniesController {
     // Checked here, against `regions.constants.ts`, exactly as CreateUserDto's station
     // pairing is (users.controller.ts) — the mapping is data, not decorators.
     for (const rate of dto.rates) {
-      if (rate.governorateCode && !governorateBelongsToRegion(rate.governorateCode, rate.regionCode)) {
+      if (
+        rate.governorateCode &&
+        !governorateBelongsToRegion(rate.governorateCode, rate.regionCode)
+      ) {
         throw new BadRequestException('governorateCode does not belong to regionCode');
       }
     }
@@ -316,7 +319,10 @@ export class CompaniesController {
 
   @Roles(UserRole.FUEL_COMPANY_ADMIN)
   @Get(':id/transporters')
-  async listTransporters(@CurrentUser() user: AuthenticatedUser, @Param('id', ObjectIdPipe) id: string) {
+  async listTransporters(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ObjectIdPipe) id: string,
+  ) {
     this.assertCompanyAccess(user, id);
     return this.companiesService.findTransporters(id);
   }
@@ -504,7 +510,10 @@ export class CompaniesController {
   // `pricing-config` do, not the transporter-ownership check `assignRegions` uses.
   @Roles(UserRole.FUEL_COMPANY_ADMIN, UserRole.SUPER_ADMIN)
   @Get(':id/covered-regions')
-  async getCoveredRegions(@CurrentUser() user: AuthenticatedUser, @Param('id', ObjectIdPipe) id: string) {
+  async getCoveredRegions(
+    @CurrentUser() user: AuthenticatedUser,
+    @Param('id', ObjectIdPipe) id: string,
+  ) {
     this.assertCompanyAccess(user, id);
     const company = await this.companiesService.findById(id);
     return company.coveredRegions;

@@ -60,7 +60,10 @@ describe('partySetScopePlugin — openToMarket validation (research R1)', () => 
   });
 
   function asA<T>(fn: () => Promise<T>): Promise<T> {
-    return tenantContext.run({ userId: 'admin-a', role: UserRole.FUEL_COMPANY_ADMIN, companyId: FUEL_CO_A }, fn);
+    return tenantContext.run(
+      { userId: 'admin-a', role: UserRole.FUEL_COMPANY_ADMIN, companyId: FUEL_CO_A },
+      fn,
+    );
   }
 
   it('accepts a market shape: openToMarket true, exactly one party, the acting company', async () => {
@@ -79,7 +82,10 @@ describe('partySetScopePlugin — openToMarket validation (research R1)', () => 
       WidgetModel.create({
         name: 'directed',
         openToMarket: false,
-        partyCompanyIds: [new mongoose.Types.ObjectId(FUEL_CO_A), new mongoose.Types.ObjectId(FUEL_CO_B)],
+        partyCompanyIds: [
+          new mongoose.Types.ObjectId(FUEL_CO_A),
+          new mongoose.Types.ObjectId(FUEL_CO_B),
+        ],
       }),
     );
     expect(doc.name).toBe('directed');
@@ -91,7 +97,10 @@ describe('partySetScopePlugin — openToMarket validation (research R1)', () => 
         WidgetModel.create({
           name: 'invalid',
           openToMarket: true,
-          partyCompanyIds: [new mongoose.Types.ObjectId(FUEL_CO_A), new mongoose.Types.ObjectId(FUEL_CO_B)],
+          partyCompanyIds: [
+            new mongoose.Types.ObjectId(FUEL_CO_A),
+            new mongoose.Types.ObjectId(FUEL_CO_B),
+          ],
         }),
       ),
     ).rejects.toThrow(/EXCHANGE_PARTY_INVALID|exactly one party/i);
@@ -143,7 +152,10 @@ describe('partySetScopePlugin — openToMarket validation (research R1)', () => 
       WidgetModel.create({
         name: 'directed',
         openToMarket: false,
-        partyCompanyIds: [new mongoose.Types.ObjectId(FUEL_CO_A), new mongoose.Types.ObjectId(FUEL_CO_B)],
+        partyCompanyIds: [
+          new mongoose.Types.ObjectId(FUEL_CO_A),
+          new mongoose.Types.ObjectId(FUEL_CO_B),
+        ],
       }),
     );
     await tenantContext.run(

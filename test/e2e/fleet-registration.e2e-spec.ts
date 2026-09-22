@@ -123,10 +123,7 @@ describe('Fleet registration — trucks, tanks, credentials (spec 008 US1)', () 
     }
 
     const [truckList, tankList] = await Promise.all([
-      request(server)
-        .get('/api/v1/trucks')
-        .set('Authorization', `Bearer ${adminA()}`)
-        .expect(200),
+      request(server).get('/api/v1/trucks').set('Authorization', `Bearer ${adminA()}`).expect(200),
       request(server).get('/api/v1/tanks').set('Authorization', `Bearer ${adminA()}`).expect(200),
     ]);
     for (const items of [truckList.body.items, tankList.body.items]) {

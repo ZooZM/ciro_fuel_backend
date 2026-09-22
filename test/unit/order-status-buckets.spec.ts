@@ -46,12 +46,8 @@ describe('ORDER_STATUS_BUCKETS exhaustiveness (FR-023d)', () => {
   });
 
   it('puts AWAITING_ROUTING under NEEDS_ATTENTION, never NEW (FR-023c)', () => {
-    expect(bucketForStatus(OrderStatus.AWAITING_ROUTING)).toBe(
-      OrderStatusBucket.NEEDS_ATTENTION,
-    );
-    expect(ORDER_STATUS_BUCKETS[OrderStatusBucket.NEW]).not.toContain(
-      OrderStatus.AWAITING_ROUTING,
-    );
+    expect(bucketForStatus(OrderStatus.AWAITING_ROUTING)).toBe(OrderStatusBucket.NEEDS_ATTENTION);
+    expect(ORDER_STATUS_BUCKETS[OrderStatusBucket.NEW]).not.toContain(OrderStatus.AWAITING_ROUTING);
   });
 
   it('resolves a bucket for every state via bucketForStatus', () => {

@@ -52,7 +52,12 @@ export class ExchangeRequest {
   @Prop({ required: true, immutable: true })
   deliveryPlaceText!: string;
 
-  @Prop({ type: String, required: true, enum: ExchangeRequestState, default: ExchangeRequestState.AWAITING_RESPONSE })
+  @Prop({
+    type: String,
+    required: true,
+    enum: ExchangeRequestState,
+    default: ExchangeRequestState.AWAITING_RESPONSE,
+  })
   state!: ExchangeRequestState;
 
   @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User' })

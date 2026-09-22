@@ -339,7 +339,9 @@ export class ExtractedSupplierInvoiceData {
   @Prop()
   issueDate?: Date;
 }
-export const ExtractedSupplierInvoiceDataSchema = SchemaFactory.createForClass(ExtractedSupplierInvoiceData);
+export const ExtractedSupplierInvoiceDataSchema = SchemaFactory.createForClass(
+  ExtractedSupplierInvoiceData,
+);
 
 /** spec 013 T180/FR-073a-ii — what the administrator confirmed. This is what counts: the
  * shortfall/excess computation and every balance movement read `confirmed`, never
@@ -358,7 +360,9 @@ export class ConfirmedSupplierInvoiceData {
   @Prop({ required: true })
   issueDate!: Date;
 }
-export const ConfirmedSupplierInvoiceDataSchema = SchemaFactory.createForClass(ConfirmedSupplierInvoiceData);
+export const ConfirmedSupplierInvoiceDataSchema = SchemaFactory.createForClass(
+  ConfirmedSupplierInvoiceData,
+);
 
 /**
  * spec 013 T180/FR-073/R7 — one supplier invoice reconciled against this order. **Keeps

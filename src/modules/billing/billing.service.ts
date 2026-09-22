@@ -30,7 +30,8 @@ const CEILING_WARNING_THRESHOLD = 0.9;
 @Injectable()
 export class BillingService {
   constructor(
-    @InjectModel(CommissionTerm.name) private readonly commissionTermModel: Model<CommissionTermDocument>,
+    @InjectModel(CommissionTerm.name)
+    private readonly commissionTermModel: Model<CommissionTermDocument>,
     @InjectModel(CashbackProgramme.name)
     private readonly cashbackProgrammeModel: Model<CashbackProgrammeDocument>,
     @InjectModel(Company.name) private readonly companyModel: Model<CompanyDocument>,
@@ -91,16 +92,23 @@ export class BillingService {
   }
 
   private computeAmount(basis: CommissionBasis, rate: number, invoiceAmount: number): number {
-    return roundCurrency(basis === CommissionBasis.PERCENTAGE ? (invoiceAmount * rate) / 100 : invoiceAmount * rate);
+    return roundCurrency(
+      basis === CommissionBasis.PERCENTAGE ? (invoiceAmount * rate) / 100 : invoiceAmount * rate,
+    );
   }
 
   // T135/FR-062b — a company's own ceiling if the operator set one, otherwise the
   // platform-wide config default (never absent: Joi fails at boot without it, T009).
-  async resolveCeiling(companyId: string | Types.ObjectId, session?: ClientSession): Promise<number> {
+  async resolveCeiling(
+    companyId: string | Types.ObjectId,
+    session?: ClientSession,
+  ): Promise<number> {
     const query = this.companyModel.findById(companyId).select('commissionCeiling');
     if (session) query.session(session);
     const company = await query.exec();
-    return company?.commissionCeiling ?? this.config.get<number>('billing.defaultCommissionCeiling')!;
+    return (
+      company?.commissionCeiling ?? this.config.get<number>('billing.defaultCommissionCeiling')!
+    );
   }
 
   /**
@@ -119,8 +127,16 @@ export class BillingService {
     session?: ClientSession,
   ): Promise<number> {
     const [charged, paid] = await Promise.all([
-      this.platformAccountService.getConfirmedBalance(companyId, AccountMovementKind.COMMISSION_CHARGED, session),
-      this.platformAccountService.getConfirmedBalance(companyId, AccountMovementKind.PAYMENT_RECORDED, session),
+      this.platformAccountService.getConfirmedBalance(
+        companyId,
+        AccountMovementKind.COMMISSION_CHARGED,
+        session,
+      ),
+      this.platformAccountService.getConfirmedBalance(
+        companyId,
+        AccountMovementKind.PAYMENT_RECORDED,
+        session,
+      ),
     ]);
     return charged - paid;
   }
@@ -135,7 +151,10 @@ export class BillingService {
    * `InvoicesService.issueInvoice`'s transaction — refusing here means the transaction
    * never commits, so the order is never left half-approved (spec Edge Cases).
    */
-  async assertUnderCeiling(companyId: string | Types.ObjectId, session: ClientSession): Promise<void> {
+  async assertUnderCeiling(
+    companyId: string | Types.ObjectId,
+    session: ClientSession,
+  ): Promise<void> {
     const [balance, ceiling] = await Promise.all([
       this.getNetCommissionOwed(companyId, session),
       this.resolveCeiling(companyId, session),
@@ -151,7 +170,11 @@ export class BillingService {
   // T142/T143/FR-057 — called from `InvoicesService.issueInvoice`, inside `approve`'s
   // transaction. A missing term means the operator has not configured commission yet:
   // charges nothing, rather than inventing a rate.
-  async accrueCommission(order: OrderDocument, invoice: InvoiceDocument, session: ClientSession): Promise<void> {
+  async accrueCommission(
+    order: OrderDocument,
+    invoice: InvoiceDocument,
+    session: ClientSession,
+  ): Promise<void> {
     const term = await this.getCurrentCommissionTerm(session);
     if (!term) return;
     const amount = this.computeAmount(term.basis, term.rate, invoice.amount);
@@ -205,7 +228,10 @@ export class BillingService {
   // T149/FR-063 — a thin pass-through naming this feature's own vocabulary; the actual
   // compensating-movement logic lives in `PlatformAccountService` since Phase 13's ledger
   // reversal (were one ever needed there) would use the identical mechanism.
-  reverseAccrualsForInvoice(invoiceId: string | Types.ObjectId, session: ClientSession): Promise<void> {
+  reverseAccrualsForInvoice(
+    invoiceId: string | Types.ObjectId,
+    session: ClientSession,
+  ): Promise<void> {
     return this.platformAccountService.reverseMovementsForInvoice(invoiceId, session);
   }
 
@@ -217,7 +243,10 @@ export class BillingService {
   async getBalancesForCompany(companyId: string | Types.ObjectId): Promise<BillingBalances> {
     const [commissionAccrued, cashbackAccrued, ceiling] = await Promise.all([
       this.getNetCommissionOwed(companyId),
-      this.platformAccountService.getConfirmedBalance(companyId, AccountMovementKind.CASHBACK_CREDITED),
+      this.platformAccountService.getConfirmedBalance(
+        companyId,
+        AccountMovementKind.CASHBACK_CREDITED,
+      ),
       this.resolveCeiling(companyId),
     ]);
     return {

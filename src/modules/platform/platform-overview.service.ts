@@ -53,30 +53,21 @@ export class PlatformOverviewService {
    * inferred, because two figures under one date range answering on different
    * bases otherwise reads as a bug in one of them.
    */
-  async getOverview(
-    from: Date,
-    to: Date,
-    isDefault: boolean,
-  ): Promise<PlatformOverviewDto> {
-    const [
-      deliveredTotals,
-      fuelCompanies,
-      transportCompanies,
-      stations,
-      orderSummary,
-    ] = await Promise.all([
-      this.sumDeliveredTotals(from, to),
-      this.companiesService.countByType(CompanyType.FUEL),
-      this.companiesService.countByType(CompanyType.TRANSPORT),
-      // `countForPlatform`, not `countForCompany` — the same query, but a name
-      // that says what it does at THIS call site (research R6).
-      this.stationsService.countForPlatform(),
-      // Delegated, never counted a second time: the home chart and the orders
-      // screen read one computation, so they cannot drift apart about what
-      // "in progress" means, and `orderCount` below is the same figure the six
-      // buckets sum to by construction rather than by coincidence.
-      this.ordersService.getPlatformSummary(from, to),
-    ]);
+  async getOverview(from: Date, to: Date, isDefault: boolean): Promise<PlatformOverviewDto> {
+    const [deliveredTotals, fuelCompanies, transportCompanies, stations, orderSummary] =
+      await Promise.all([
+        this.sumDeliveredTotals(from, to),
+        this.companiesService.countByType(CompanyType.FUEL),
+        this.companiesService.countByType(CompanyType.TRANSPORT),
+        // `countForPlatform`, not `countForCompany` — the same query, but a name
+        // that says what it does at THIS call site (research R6).
+        this.stationsService.countForPlatform(),
+        // Delegated, never counted a second time: the home chart and the orders
+        // screen read one computation, so they cannot drift apart about what
+        // "in progress" means, and `orderCount` below is the same figure the six
+        // buckets sum to by construction rather than by coincidence.
+        this.ordersService.getPlatformSummary(from, to),
+      ]);
 
     return {
       period: {

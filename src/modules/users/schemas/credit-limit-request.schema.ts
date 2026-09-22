@@ -28,7 +28,12 @@ export class CreditLimitRequest {
   @Prop({ required: true, min: 0.01 })
   requestedAmount!: number;
 
-  @Prop({ type: String, required: true, enum: CreditLimitRequestState, default: CreditLimitRequestState.PENDING })
+  @Prop({
+    type: String,
+    required: true,
+    enum: CreditLimitRequestState,
+    default: CreditLimitRequestState.PENDING,
+  })
   state!: CreditLimitRequestState;
 
   // Present only once accepted — may differ from `requestedAmount` (FR-030).

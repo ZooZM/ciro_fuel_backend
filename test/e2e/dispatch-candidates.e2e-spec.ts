@@ -1,7 +1,12 @@
 import request from 'supertest';
 import { INestApplication } from '@nestjs/common';
 import { createTestApp, TestAppContext } from '../utils/test-app.factory';
-import { seedTwoCompanies, uniquePhone, TwoCompanyFixture, settleClientReview } from '../utils/fixtures';
+import {
+  seedTwoCompanies,
+  uniquePhone,
+  TwoCompanyFixture,
+  settleClientReview,
+} from '../utils/fixtures';
 import { UsersService } from '../../src/modules/users/users.service';
 import { AuthService } from '../../src/modules/auth/auth.service';
 import { CompaniesService } from '../../src/modules/companies/companies.service';

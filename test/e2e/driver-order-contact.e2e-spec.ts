@@ -2,7 +2,12 @@ import request from 'supertest';
 import { createHmac } from 'node:crypto';
 import { INestApplication } from '@nestjs/common';
 import { createTestApp, TestAppContext } from '../utils/test-app.factory';
-import { seedTwoCompanies, TwoCompanyFixture, resetFixtureDispatchState, settleClientReview } from '../utils/fixtures';
+import {
+  seedTwoCompanies,
+  TwoCompanyFixture,
+  resetFixtureDispatchState,
+  settleClientReview,
+} from '../utils/fixtures';
 
 jest.setTimeout(120_000);
 

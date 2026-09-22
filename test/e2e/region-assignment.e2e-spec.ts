@@ -197,8 +197,8 @@ describe('Transporter creation & region assignment (spec 004 US2)', () => {
    * `create` above existed with no listing counterpart. Without this, an onboarded
    * transporter could never be seen again through any endpoint.
    */
-  describe('listing a fuel company\'s own transporters (FR-033)', () => {
-    it('lists exactly the transporters this fuel company created, and none of another\'s', async () => {
+  describe("listing a fuel company's own transporters (FR-033)", () => {
+    it("lists exactly the transporters this fuel company created, and none of another's", async () => {
       const created = await createTransporter(
         fixtures.companyA.companyId,
         fixtures.companyA.admin.token,

@@ -253,7 +253,11 @@ describe('Billing — three payment methods (spec 004 US5)', () => {
       const created = await request(server)
         .post('/api/v1/orders')
         .set('Authorization', `Bearer ${client.token}`)
-        .send({ fuelType: 'DIESEL', quantityLiters: 10, ...(paymentMethod ? { paymentMethod } : {}) })
+        .send({
+          fuelType: 'DIESEL',
+          quantityLiters: 10,
+          ...(paymentMethod ? { paymentMethod } : {}),
+        })
         .expect(201);
       const approved = await request(server)
         .patch(`/api/v1/orders/${created.body._id}/approve`)

@@ -145,7 +145,13 @@ describe('Operator oversight: per-company drill-down and operator-only refusals 
     await request(server)
       .put('/api/v1/billing/cashback-programme')
       .set('Authorization', `Bearer ${admin.token}`)
-      .send({ basis: 'PERCENTAGE', rate: 5, isActive: true, targetsAllCompanies: true, targetCompanyIds: [] })
+      .send({
+        basis: 'PERCENTAGE',
+        rate: 5,
+        isActive: true,
+        targetsAllCompanies: true,
+        targetCompanyIds: [],
+      })
       .expect(403);
 
     await request(server)

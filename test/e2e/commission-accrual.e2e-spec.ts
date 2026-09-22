@@ -93,7 +93,10 @@ describe('Commission accrual matches the rate in force, including across a rate 
       .get('/api/v1/billing/balances/me')
       .set('Authorization', `Bearer ${admin.token}`)
       .expect(200);
-    expect(afterRateChangeAlone.body.commissionAccrued).toBeCloseTo(afterFirst.body.commissionAccrued, 2);
+    expect(afterRateChangeAlone.body.commissionAccrued).toBeCloseTo(
+      afterFirst.body.commissionAccrued,
+      2,
+    );
 
     // A NEW invoice at the new 20% rate, again derived from its own total.
     const secondOrder = await createAndApproveOrder(client.token, admin.token, 'CREDIT', 200);
@@ -142,7 +145,10 @@ describe('Commission accrual matches the rate in force, including across a rate 
       .get('/api/v1/billing/balances/me')
       .set('Authorization', `Bearer ${admin.token}`)
       .expect(200);
-    expect(after.body.commissionAccrued).toBeCloseTo(before.body.commissionAccrued + expectedPerUnit, 2);
+    expect(after.body.commissionAccrued).toBeCloseTo(
+      before.body.commissionAccrued + expectedPerUnit,
+      2,
+    );
 
     // A FUEL_COMPANY_ADMIN sees the terms read-only — no PUT access at all (FR-056).
     await request(server)

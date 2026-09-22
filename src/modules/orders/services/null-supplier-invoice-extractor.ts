@@ -1,5 +1,8 @@
 import { Injectable } from '@nestjs/common';
-import { ExtractedSupplierInvoiceFields, SupplierInvoiceExtractionPort } from './supplier-invoice-extraction.port';
+import {
+  ExtractedSupplierInvoiceFields,
+  SupplierInvoiceExtractionPort,
+} from './supplier-invoice-extraction.port';
 
 /**
  * spec 013 T179/R8 — extracts nothing, always. Registered as the default (and, today, only)

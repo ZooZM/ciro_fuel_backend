@@ -116,9 +116,7 @@ export class AnnouncementsService {
    * WORKER, where there is no context at all — so the bypass is stated rather
    * than inherited from whoever happens to be calling.
    */
-  async resolveCandidates(
-    targetCompanyIds: Types.ObjectId[],
-  ): Promise<AnnouncementCandidate[]> {
+  async resolveCandidates(targetCompanyIds: Types.ObjectId[]): Promise<AnnouncementCandidate[]> {
     return this.tenantContext.runUnscoped(async () => {
       const companyFilter: FilterQuery<CompanyDocument> = {};
       // An EMPTY target list means every company (FR-049). That is the whole
@@ -200,9 +198,7 @@ export class AnnouncementsService {
    */
   async resolveRecipients(targetCompanyIds: Types.ObjectId[]): Promise<UserDocument[]> {
     const candidates = await this.resolveCandidates(targetCompanyIds);
-    return candidates
-      .filter((c) => !c.failureReason && c.recipient)
-      .map((c) => c.recipient!);
+    return candidates.filter((c) => !c.failureReason && c.recipient).map((c) => c.recipient!);
   }
 
   /** FR-052 — what was sent, newest first. Distinct from the deliveries. */

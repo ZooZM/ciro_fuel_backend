@@ -2,7 +2,12 @@ import request from 'supertest';
 import { createHmac } from 'node:crypto';
 import { INestApplication } from '@nestjs/common';
 import { createTestApp, TestAppContext } from '../utils/test-app.factory';
-import { DEFAULT_WAREHOUSE_LOCATION, seedTwoCompanies, TwoCompanyFixture, settleClientReview } from '../utils/fixtures';
+import {
+  DEFAULT_WAREHOUSE_LOCATION,
+  seedTwoCompanies,
+  TwoCompanyFixture,
+  settleClientReview,
+} from '../utils/fixtures';
 import { UsersService } from '../../src/modules/users/users.service';
 import { OrderStatus } from '../../src/common/enums/order-status.enum';
 import { ErrorCode } from '../../src/common/enums/error-code.enum';

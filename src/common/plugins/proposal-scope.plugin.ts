@@ -60,7 +60,9 @@ export function createProposalScopePlugin(tenantContext: TenantContextService) {
       throw new Error(`Proposal isolation violation: no scoping rule defined for role ${ctx.role}`);
     }
     if (!ctx.companyId) {
-      throw new Error('Proposal isolation violation: FUEL_COMPANY_ADMIN context is missing companyId');
+      throw new Error(
+        'Proposal isolation violation: FUEL_COMPANY_ADMIN context is missing companyId',
+      );
     }
     return ctx.companyId;
   }
@@ -89,7 +91,10 @@ export function createProposalScopePlugin(tenantContext: TenantContextService) {
         if (!actingCompanyId) return;
         if (isQuery(this)) {
           this.where({
-            $or: [{ proposingCompanyId: actingCompanyId }, { offerRaisedByCompanyId: actingCompanyId }],
+            $or: [
+              { proposingCompanyId: actingCompanyId },
+              { offerRaisedByCompanyId: actingCompanyId },
+            ],
           });
         }
       });

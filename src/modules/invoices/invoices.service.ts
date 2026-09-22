@@ -271,7 +271,10 @@ export class InvoicesService {
    * observable.
    */
   async voidInvoice(orderId: Types.ObjectId | string, session?: ClientSession): Promise<void> {
-    const invoice = await this.invoiceModel.findOne({ orderId }).session(session ?? null).exec();
+    const invoice = await this.invoiceModel
+      .findOne({ orderId })
+      .session(session ?? null)
+      .exec();
     if (!invoice || invoice.state !== InvoiceState.ISSUED) {
       return;
     }
@@ -296,7 +299,12 @@ export class InvoicesService {
    * buried past the first page by a pile of newer settled ones, since it
    * keeps counting against the client's credit either way. */
   findForUser(
-    filter: { method?: PaymentMethod; state?: InvoiceState; cursor?: string; fuelCompanyId?: string } = {},
+    filter: {
+      method?: PaymentMethod;
+      state?: InvoiceState;
+      cursor?: string;
+      fuelCompanyId?: string;
+    } = {},
   ): Promise<PaginatedResponse<InvoiceDocument>> {
     const query: Record<string, unknown> = {};
     if (filter.method !== undefined) {

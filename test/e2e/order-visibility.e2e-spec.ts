@@ -7,7 +7,9 @@ import {
   seedTwoCompanies,
   TwoCompanyFixture,
   assignAndDepart,
-  resetFixtureDispatchState, settleClientReview } from '../utils/fixtures';
+  resetFixtureDispatchState,
+  settleClientReview,
+} from '../utils/fixtures';
 import { OrderStatus } from '../../src/common/enums/order-status.enum';
 import { User, UserDocument } from '../../src/modules/users/schemas/user.schema';
 

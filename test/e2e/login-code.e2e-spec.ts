@@ -93,10 +93,7 @@ describe('Login code sign-in (spec 015 US2)', () => {
   }
 
   function requestCode(phone: string) {
-    return request(server())
-      .post('/api/v1/auth/login/code/request')
-      .send({ phone })
-      .expect(202);
+    return request(server()).post('/api/v1/auth/login/code/request').send({ phone }).expect(202);
   }
 
   // ── T046 ──────────────────────────────────────────────────────────────────

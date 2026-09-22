@@ -5,7 +5,12 @@ import { getModelToken } from '@nestjs/mongoose';
 import { Queue } from 'bullmq';
 import { Model } from 'mongoose';
 import { createTestApp, TestAppContext } from '../utils/test-app.factory';
-import { seedTwoCompanies, uniquePhone, TwoCompanyFixture, settleClientReview } from '../utils/fixtures';
+import {
+  seedTwoCompanies,
+  uniquePhone,
+  TwoCompanyFixture,
+  settleClientReview,
+} from '../utils/fixtures';
 import { ASSIGNMENT_ESCALATION_QUEUE } from '../../src/modules/assignment-escalation/queues/assignment-escalation-queue.service';
 import { OrderStatus } from '../../src/common/enums/order-status.enum';
 import { UserRole } from '../../src/common/enums/user-role.enum';

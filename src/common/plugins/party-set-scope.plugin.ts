@@ -69,10 +69,14 @@ export function createPartySetScopePlugin(tenantContext: TenantContextService) {
       return undefined;
     }
     if (ctx.role !== UserRole.FUEL_COMPANY_ADMIN) {
-      throw new Error(`Party-set isolation violation: no scoping rule defined for role ${ctx.role}`);
+      throw new Error(
+        `Party-set isolation violation: no scoping rule defined for role ${ctx.role}`,
+      );
     }
     if (!ctx.companyId) {
-      throw new Error('Party-set isolation violation: FUEL_COMPANY_ADMIN context is missing companyId');
+      throw new Error(
+        'Party-set isolation violation: FUEL_COMPANY_ADMIN context is missing companyId',
+      );
     }
     return ctx.companyId;
   }

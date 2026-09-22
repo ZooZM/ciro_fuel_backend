@@ -43,7 +43,10 @@ describe('Supplier invoices and litre balances (US11, FR-073*)', () => {
     return request(app.getHttpServer())
       .post(`/api/v1/orders/${orderId}/supplier-invoice/upload`)
       .set('Authorization', `Bearer ${admin.token}`)
-      .attach('file', Buffer.from('%PDF-1.4 fake'), { filename: 'invoice.pdf', contentType: 'application/pdf' });
+      .attach('file', Buffer.from('%PDF-1.4 fake'), {
+        filename: 'invoice.pdf',
+        contentType: 'application/pdf',
+      });
   }
 
   it('credits the exact reference-case shortfall: 31,501.100 L against 33,000 L -> 1,498.900 L (FR-073c)', async () => {
@@ -59,7 +62,12 @@ describe('Supplier invoices and litre balances (US11, FR-073*)', () => {
       .set('Authorization', `Bearer ${admin.token}`)
       .send({
         fileId: uploaded.body.fileId,
-        confirmed: { quantityLitres: 31_501.1, fuelType: 'DIESEL', reference: 'SUP-INV-1', issueDate: '2026-01-05' },
+        confirmed: {
+          quantityLitres: 31_501.1,
+          fuelType: 'DIESEL',
+          reference: 'SUP-INV-1',
+          issueDate: '2026-01-05',
+        },
       })
       .expect(201);
     expect(confirmed.body.shortfallLitres).toBeCloseTo(1_498.9, 3);
@@ -71,7 +79,9 @@ describe('Supplier invoices and litre balances (US11, FR-073*)', () => {
       .get('/api/v1/users/me/litre-balances')
       .set('Authorization', `Bearer ${client.token}`)
       .expect(200);
-    const dieselBalance = clientBalances.body.items.find((b: { fuelType: string }) => b.fuelType === 'DIESEL');
+    const dieselBalance = clientBalances.body.items.find(
+      (b: { fuelType: string }) => b.fuelType === 'DIESEL',
+    );
     expect(dieselBalance.balanceLitres).toBeCloseTo(1_498.9, 3);
     expect(dieselBalance.movements).toHaveLength(1);
     expect(dieselBalance.movements[0].kind).toBe('SHORTFALL_CREDIT');
@@ -87,14 +97,20 @@ describe('Supplier invoices and litre balances (US11, FR-073*)', () => {
       .set('Authorization', `Bearer ${client.token}`)
       .expect(200);
     const movementCountBefore =
-      before.body.items.find((b: { fuelType: string }) => b.fuelType === 'DIESEL')?.movements?.length ?? 0;
+      before.body.items.find((b: { fuelType: string }) => b.fuelType === 'DIESEL')?.movements
+        ?.length ?? 0;
 
     await request(app.getHttpServer())
       .post(`/api/v1/orders/${orderId}/supplier-invoice`)
       .set('Authorization', `Bearer ${admin.token}`)
       .send({
         fileId: uploaded.body.fileId,
-        confirmed: { quantityLitres: 500, fuelType: 'DIESEL', reference: 'SUP-INV-2', issueDate: '2026-01-06' },
+        confirmed: {
+          quantityLitres: 500,
+          fuelType: 'DIESEL',
+          reference: 'SUP-INV-2',
+          issueDate: '2026-01-06',
+        },
       })
       .expect(201);
 
@@ -118,7 +134,12 @@ describe('Supplier invoices and litre balances (US11, FR-073*)', () => {
       .set('Authorization', `Bearer ${admin.token}`)
       .send({
         fileId: uploaded.body.fileId,
-        confirmed: { quantityLitres: 250, fuelType: 'DIESEL', reference: 'SUP-INV-3', issueDate: '2026-01-07' },
+        confirmed: {
+          quantityLitres: 250,
+          fuelType: 'DIESEL',
+          reference: 'SUP-INV-3',
+          issueDate: '2026-01-07',
+        },
       })
       .expect(201);
     expect(confirmed.body.shortfallLitres).toBeCloseTo(-150, 3);
@@ -129,7 +150,9 @@ describe('Supplier invoices and litre balances (US11, FR-073*)', () => {
       .get('/api/v1/users/me/litre-balances')
       .set('Authorization', `Bearer ${client.token}`)
       .expect(200);
-    const dieselBalance = balances.body.items.find((b: { fuelType: string }) => b.fuelType === 'DIESEL');
+    const dieselBalance = balances.body.items.find(
+      (b: { fuelType: string }) => b.fuelType === 'DIESEL',
+    );
     const debitMovement = dieselBalance.movements.find(
       (m: { kind: string; litres: number }) => m.kind === 'EXCESS_DEBIT' && m.litres === -150,
     );
@@ -142,7 +165,12 @@ describe('Supplier invoices and litre balances (US11, FR-073*)', () => {
     const uploaded = await uploadInvoice(orderId, admin).expect(201);
     const confirmBody = {
       fileId: uploaded.body.fileId,
-      confirmed: { quantityLitres: 180, fuelType: 'DIESEL', reference: 'SUP-INV-4', issueDate: '2026-01-08' },
+      confirmed: {
+        quantityLitres: 180,
+        fuelType: 'DIESEL',
+        reference: 'SUP-INV-4',
+        issueDate: '2026-01-08',
+      },
     };
     await request(app.getHttpServer())
       .post(`/api/v1/orders/${orderId}/supplier-invoice`)
@@ -180,7 +208,12 @@ describe('Supplier invoices and litre balances (US11, FR-073*)', () => {
       .set('Authorization', `Bearer ${admin.token}`)
       .send({
         fileId: uploaded.body.fileId,
-        confirmed: { quantityLitres: 90, fuelType: 'PETROL_91', reference: 'SUP-INV-5', issueDate: '2026-01-09' },
+        confirmed: {
+          quantityLitres: 90,
+          fuelType: 'PETROL_91',
+          reference: 'SUP-INV-5',
+          issueDate: '2026-01-09',
+        },
       })
       .expect(400);
     expect(refused.body.error).toBe('SUPPLIER_INVOICE_GRADE_MISMATCH');
@@ -203,7 +236,12 @@ describe('Supplier invoices and litre balances (US11, FR-073*)', () => {
       .set('Authorization', `Bearer ${admin.token}`)
       .send({
         fileId: refused.body.fileId,
-        confirmed: { quantityLitres: 90, fuelType: 'DIESEL', reference: 'SUP-INV-6', issueDate: '2026-01-10' },
+        confirmed: {
+          quantityLitres: 90,
+          fuelType: 'DIESEL',
+          reference: 'SUP-INV-6',
+          issueDate: '2026-01-10',
+        },
       })
       .expect(409)
       .expect((res) => expect(res.body.error).toBe('SUPPLIER_INVOICE_ORDER_NOT_ELIGIBLE'));
@@ -218,7 +256,12 @@ describe('Supplier invoices and litre balances (US11, FR-073*)', () => {
       .set('Authorization', `Bearer ${admin.token}`)
       .send({
         fileId: first.body.fileId,
-        confirmed: { quantityLitres: 900, fuelType: 'DIESEL', reference: 'SUP-INV-7a', issueDate: '2026-01-11' },
+        confirmed: {
+          quantityLitres: 900,
+          fuelType: 'DIESEL',
+          reference: 'SUP-INV-7a',
+          issueDate: '2026-01-11',
+        },
       })
       .expect(201);
 
@@ -226,7 +269,9 @@ describe('Supplier invoices and litre balances (US11, FR-073*)', () => {
       .get('/api/v1/users/me/litre-balances')
       .set('Authorization', `Bearer ${client.token}`)
       .expect(200);
-    const beforeBalance = before.body.items.find((b: { fuelType: string }) => b.fuelType === 'DIESEL').balanceLitres;
+    const beforeBalance = before.body.items.find(
+      (b: { fuelType: string }) => b.fuelType === 'DIESEL',
+    ).balanceLitres;
 
     const second = await uploadInvoice(orderId, admin).expect(201);
     const replaced = await request(app.getHttpServer())
@@ -234,7 +279,12 @@ describe('Supplier invoices and litre balances (US11, FR-073*)', () => {
       .set('Authorization', `Bearer ${admin.token}`)
       .send({
         fileId: second.body.fileId,
-        confirmed: { quantityLitres: 950, fuelType: 'DIESEL', reference: 'SUP-INV-7b', issueDate: '2026-01-12' },
+        confirmed: {
+          quantityLitres: 950,
+          fuelType: 'DIESEL',
+          reference: 'SUP-INV-7b',
+          issueDate: '2026-01-12',
+        },
       })
       .expect(200);
     expect(replaced.body.shortfallLitres).toBeCloseTo(50, 3);
@@ -243,7 +293,9 @@ describe('Supplier invoices and litre balances (US11, FR-073*)', () => {
       .get('/api/v1/users/me/litre-balances')
       .set('Authorization', `Bearer ${client.token}`)
       .expect(200);
-    const dieselBalance = after.body.items.find((b: { fuelType: string }) => b.fuelType === 'DIESEL');
+    const dieselBalance = after.body.items.find(
+      (b: { fuelType: string }) => b.fuelType === 'DIESEL',
+    );
     // Restated from 100 (1000-900) to 50 (1000-950) -> the balance moved by exactly the
     // 50 L difference, not by a second full accrual.
     expect(dieselBalance.balanceLitres).toBeCloseTo(beforeBalance - 50, 3);

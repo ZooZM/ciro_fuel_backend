@@ -261,9 +261,7 @@ describe('The platform-wide order list and its buckets (US3)', () => {
         .send({ reason: 'Not at a completable stage' })
         .expect(409);
 
-      const after = await connection
-        .collection('orders')
-        .findOne({ _id: new Types.ObjectId(id) });
+      const after = await connection.collection('orders').findOne({ _id: new Types.ObjectId(id) });
       expect(after?.status).toBe(OrderStatus.PENDING_APPROVAL);
     });
 
@@ -346,10 +344,7 @@ describe('The platform-wide order list and its buckets (US3)', () => {
         .expect(200);
       const targetId = String(otherCompanyOrder.body.items[0]._id);
 
-      const res = await list(
-        fixtures.companyA.client.token,
-        `?orderId=${targetId}`,
-      ).expect(200);
+      const res = await list(fixtures.companyA.client.token, `?orderId=${targetId}`).expect(200);
       expect(res.body.items).toHaveLength(0);
     });
   });

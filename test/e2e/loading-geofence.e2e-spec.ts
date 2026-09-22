@@ -7,7 +7,9 @@ import {
   DEFAULT_WAREHOUSE_LOCATION,
   resetFixtureDispatchState,
   seedTwoCompanies,
-  TwoCompanyFixture, settleClientReview } from '../utils/fixtures';
+  TwoCompanyFixture,
+  settleClientReview,
+} from '../utils/fixtures';
 import { OrderStatus } from '../../src/common/enums/order-status.enum';
 import { ErrorCode } from '../../src/common/enums/error-code.enum';
 import { VerificationStage } from '../../src/common/enums/verification-stage.enum';

@@ -1,4 +1,13 @@
-import { ArrayUnique, IsArray, IsBoolean, IsEnum, IsMongoId, IsNumber, Min, ValidateIf } from 'class-validator';
+import {
+  ArrayUnique,
+  IsArray,
+  IsBoolean,
+  IsEnum,
+  IsMongoId,
+  IsNumber,
+  Min,
+  ValidateIf,
+} from 'class-validator';
 import { CommissionBasis } from '../../../common/enums/commission-basis.enum';
 
 export class SetCashbackProgrammeDto {

@@ -199,10 +199,14 @@ describe('Configuration validation (spec 012)', () => {
     });
 
     it('is opt-in only by an explicit true', () => {
-      expect(validate({ ...base, LOGIN_CODE_REVEAL_UNKNOWN_PHONE: 'true' }).value
-        .LOGIN_CODE_REVEAL_UNKNOWN_PHONE).toBe(true);
-      expect(validate({ ...base, LOGIN_CODE_REVEAL_UNKNOWN_PHONE: 'false' }).value
-        .LOGIN_CODE_REVEAL_UNKNOWN_PHONE).toBe(false);
+      expect(
+        validate({ ...base, LOGIN_CODE_REVEAL_UNKNOWN_PHONE: 'true' }).value
+          .LOGIN_CODE_REVEAL_UNKNOWN_PHONE,
+      ).toBe(true);
+      expect(
+        validate({ ...base, LOGIN_CODE_REVEAL_UNKNOWN_PHONE: 'false' }).value
+          .LOGIN_CODE_REVEAL_UNKNOWN_PHONE,
+      ).toBe(false);
     });
 
     it('refuses a value that is neither true nor false', () => {

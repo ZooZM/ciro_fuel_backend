@@ -40,7 +40,9 @@ describe('TaqnyatSmsSender (spec 015 US1)', () => {
 
   it('throws when a 201 lists the recipient under `rejected`', async () => {
     fetchMock.mockResolvedValue(okResponse({ rejected: '[966500000000]', messageId: 'm1' }));
-    await expect(sender.send('+966500000000', 'code 123456')).rejects.toThrow(/rejected the recipient/);
+    await expect(sender.send('+966500000000', 'code 123456')).rejects.toThrow(
+      /rejected the recipient/,
+    );
   });
 
   it('accepts a 201 whose `rejected` is an empty array', async () => {
@@ -50,11 +52,17 @@ describe('TaqnyatSmsSender (spec 015 US1)', () => {
 
   it('throws on a network failure / timeout', async () => {
     fetchMock.mockRejectedValue(new Error('The operation was aborted due to timeout'));
-    await expect(sender.send('+966500000000', 'code 123456')).rejects.toThrow(/Taqnyat request failed/);
+    await expect(sender.send('+966500000000', 'code 123456')).rejects.toThrow(
+      /Taqnyat request failed/,
+    );
   });
 
   it('throws on a non-2xx response', async () => {
-    fetchMock.mockResolvedValue({ ok: false, status: 401, json: async () => ({ message: 'bad token' }) });
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: async () => ({ message: 'bad token' }),
+    });
     await expect(sender.send('+966500000000', 'code 123456')).rejects.toThrow(/HTTP 401/);
   });
 

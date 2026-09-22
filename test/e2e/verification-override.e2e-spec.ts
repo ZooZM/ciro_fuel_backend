@@ -3,7 +3,12 @@ import { createHmac } from 'node:crypto';
 import { INestApplication } from '@nestjs/common';
 import { ResilientThrottlerStorage } from '../../src/common/throttler/resilient-throttler.storage';
 import { createTestApp, TestAppContext } from '../utils/test-app.factory';
-import { resetFixtureDispatchState, seedTwoCompanies, TwoCompanyFixture, settleClientReview } from '../utils/fixtures';
+import {
+  resetFixtureDispatchState,
+  seedTwoCompanies,
+  TwoCompanyFixture,
+  settleClientReview,
+} from '../utils/fixtures';
 import { OrderStatus } from '../../src/common/enums/order-status.enum';
 import { UserRole } from '../../src/common/enums/user-role.enum';
 

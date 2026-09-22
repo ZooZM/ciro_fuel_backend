@@ -179,9 +179,7 @@ describe('Admin multi-session (spec 015 US4)', () => {
     const s1 = await login();
     const s2 = await login();
 
-    await app
-      .get(CompaniesService)
-      .setStatus(fixtures.companyA.companyId, CompanyStatus.SUSPENDED);
+    await app.get(CompaniesService).setStatus(fixtures.companyA.companyId, CompanyStatus.SUSPENDED);
 
     for (const s of [s1, s2]) {
       const res = await meStatus(s.access);

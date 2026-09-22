@@ -182,7 +182,12 @@ describe('Login abuse containment (spec 015 US3)', () => {
     await reqCode(phone).expect(429); // blocked
 
     // Simulate the block window elapsing.
-    await redis.del(`login-otp:blocked:${phone}`, `login-otp:fails:${phone}`, `login-otp:rate:${phone}`, `login-otp:rlhits:${phone}`);
+    await redis.del(
+      `login-otp:blocked:${phone}`,
+      `login-otp:fails:${phone}`,
+      `login-otp:rate:${phone}`,
+      `login-otp:rlhits:${phone}`,
+    );
 
     await reqCode(phone).expect(202);
     const res = await verify(phone, codeSentTo(phone)).expect(200);
@@ -217,9 +222,7 @@ describe('Login abuse containment (spec 015 US3)', () => {
     const norm = (s: typeof a) =>
       s.map((e) => ({
         status: e.status,
-        body: JSON.parse(
-          JSON.stringify(e.body).replace(/"seed":"[a-f0-9]+"/g, '"seed":"<seed>"'),
-        ),
+        body: JSON.parse(JSON.stringify(e.body).replace(/"seed":"[a-f0-9]+"/g, '"seed":"<seed>"')),
       }));
     expect(norm(a)).toEqual(norm(b));
   });

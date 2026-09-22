@@ -4,8 +4,14 @@ import { Model, Types } from 'mongoose';
 import { createTestApp, TestAppContext } from '../utils/test-app.factory';
 import { seedThreeFuelCompanies, ThreeFuelCompanyFixture } from '../utils/fixtures';
 import { TenantContextService } from '../../src/common/context/tenant-context.service';
-import { ExchangeOffer, ExchangeOfferDocument } from '../../src/modules/fuel-exchange/schemas/exchange-offer.schema';
-import { ExchangeProposal, ExchangeProposalDocument } from '../../src/modules/fuel-exchange/schemas/exchange-proposal.schema';
+import {
+  ExchangeOffer,
+  ExchangeOfferDocument,
+} from '../../src/modules/fuel-exchange/schemas/exchange-offer.schema';
+import {
+  ExchangeProposal,
+  ExchangeProposalDocument,
+} from '../../src/modules/fuel-exchange/schemas/exchange-proposal.schema';
 import { UserRole } from '../../src/common/enums/user-role.enum';
 import { ExchangeOfferState } from '../../src/common/enums/exchange-offer-state.enum';
 import { ProposalOutcome } from '../../src/common/enums/proposal-outcome.enum';
@@ -133,7 +139,7 @@ describe('Exchange offer isolation (Slice 0 gate, contracts/isolation-contract.m
 
   // --- Case 4: a proposer sees only its OWN proposal, never a rival's --------------
 
-  it("4. company B, having proposed, reads the proposal list: only its own — no rival price, no rival name, in the raw payload", async () => {
+  it('4. company B, having proposed, reads the proposal list: only its own — no rival price, no rival name, in the raw payload', async () => {
     const offer = await raiseMarketOffer();
     const { admin: adminB, companyId: companyIdB } = fixtures.companyB;
     const { admin: adminC, companyId: companyIdC } = fixtures.companyC;
@@ -163,7 +169,9 @@ describe('Exchange offer isolation (Slice 0 gate, contracts/isolation-contract.m
       }),
     );
 
-    const seenByB = await asCompany(companyIdB, adminB.id, () => proposalModel.find({ offerId: offer._id }).exec());
+    const seenByB = await asCompany(companyIdB, adminB.id, () =>
+      proposalModel.find({ offerId: offer._id }).exec(),
+    );
     expect(seenByB).toHaveLength(1);
     expect(String(seenByB[0].proposingCompanyId)).toBe(companyIdB);
     expect(seenByB[0].unitPrice).toBe(2.2);
@@ -242,10 +250,13 @@ describe('Exchange offer isolation (Slice 0 gate, contracts/isolation-contract.m
   it('7. SUPER_ADMIN reads every offer across every company', async () => {
     await raiseMarketOffer();
     await raiseMigratedDirectedOffer();
-    await tenantContext.run({ userId: fixtures.superAdmin.id, role: UserRole.SUPER_ADMIN }, async () => {
-      const results = await offerModel.find({}).exec();
-      expect(results).toHaveLength(2);
-    });
+    await tenantContext.run(
+      { userId: fixtures.superAdmin.id, role: UserRole.SUPER_ADMIN },
+      async () => {
+        const results = await offerModel.find({}).exec();
+        expect(results).toHaveLength(2);
+      },
+    );
   });
 
   // --- Case 8: a migrated UNANSWERED request stays readable by its original recipient
@@ -256,10 +267,14 @@ describe('Exchange offer isolation (Slice 0 gate, contracts/isolation-contract.m
     const { admin: adminB, companyId: companyIdB } = fixtures.companyB;
     const { admin: adminC, companyId: companyIdC } = fixtures.companyC;
 
-    const seenByRecipient = await asCompany(companyIdB, adminB.id, () => offerModel.findById(offer._id).exec());
+    const seenByRecipient = await asCompany(companyIdB, adminB.id, () =>
+      offerModel.findById(offer._id).exec(),
+    );
     expect(seenByRecipient).not.toBeNull();
 
-    const seenByOutsider = await asCompany(companyIdC, adminC.id, () => offerModel.findById(offer._id).exec());
+    const seenByOutsider = await asCompany(companyIdC, adminC.id, () =>
+      offerModel.findById(offer._id).exec(),
+    );
     expect(seenByOutsider).toBeNull();
   });
 });

@@ -7,7 +7,9 @@ import {
   DEFAULT_WAREHOUSE_LOCATION,
   resetFixtureDispatchState,
   seedTwoCompanies,
-  TwoCompanyFixture, settleClientReview } from '../utils/fixtures';
+  TwoCompanyFixture,
+  settleClientReview,
+} from '../utils/fixtures';
 import { getModelToken } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import {

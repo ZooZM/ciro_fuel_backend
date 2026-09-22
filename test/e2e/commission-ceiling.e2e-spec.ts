@@ -215,7 +215,7 @@ describe('Commission ceiling: warning, refusal, automatic resumption, platform d
       .expect(200);
   });
 
-  it("a newly onboarded company with no explicit ceiling is governed by the platform-wide default", async () => {
+  it('a newly onboarded company with no explicit ceiling is governed by the platform-wide default', async () => {
     const server = app.getHttpServer();
     const { admin, companyId } = fixtures.companyB;
 
@@ -225,7 +225,9 @@ describe('Commission ceiling: warning, refusal, automatic resumption, platform d
       .expect(200);
 
     // Never explicitly set for company B in this suite — the platform default governs.
-    expect(balances.body.commissionCeiling).toBe(Number(process.env.PLATFORM_DEFAULT_COMMISSION_CEILING));
+    expect(balances.body.commissionCeiling).toBe(
+      Number(process.env.PLATFORM_DEFAULT_COMMISSION_CEILING),
+    );
     void companyId;
   });
 });

@@ -55,7 +55,13 @@ describe('Cashback accrues only while active and only for a targeted company (FR
     await request(server)
       .put('/api/v1/billing/cashback-programme')
       .set('Authorization', `Bearer ${fixtures.superAdmin.token}`)
-      .send({ basis: 'PERCENTAGE', rate: 5, isActive: false, targetsAllCompanies: true, targetCompanyIds: [] })
+      .send({
+        basis: 'PERCENTAGE',
+        rate: 5,
+        isActive: false,
+        targetsAllCompanies: true,
+        targetCompanyIds: [],
+      })
       .expect(200);
 
     const before = await request(server)
@@ -74,7 +80,13 @@ describe('Cashback accrues only while active and only for a targeted company (FR
     await request(server)
       .put('/api/v1/billing/cashback-programme')
       .set('Authorization', `Bearer ${fixtures.superAdmin.token}`)
-      .send({ basis: 'PERCENTAGE', rate: 5, isActive: true, targetsAllCompanies: true, targetCompanyIds: [] })
+      .send({
+        basis: 'PERCENTAGE',
+        rate: 5,
+        isActive: true,
+        targetsAllCompanies: true,
+        targetCompanyIds: [],
+      })
       .expect(200);
 
     // Cashback is a percentage of the settled INVOICE, so the expectation is

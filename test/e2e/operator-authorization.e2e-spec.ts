@@ -180,10 +180,7 @@ describe('Every operator-only route refuses every other role (SC-012)', () => {
     });
 
     it('GET /orders/summary still serves both administrator roles', async () => {
-      for (const token of [
-        fixtures.companyA.admin.token,
-        fixtures.companyA.transportAdmin.token,
-      ]) {
+      for (const token of [fixtures.companyA.admin.token, fixtures.companyA.transportAdmin.token]) {
         await request(app.getHttpServer())
           .get('/api/v1/orders/summary')
           .set('Authorization', `Bearer ${token}`)

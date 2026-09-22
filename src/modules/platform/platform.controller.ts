@@ -25,11 +25,7 @@ export class PlatformController {
     @Query('to') to?: string,
   ): Promise<PlatformOverviewDto> {
     const period = resolvePeriod(from, to);
-    return this.platformOverviewService.getOverview(
-      period.from,
-      period.to,
-      period.isDefault,
-    );
+    return this.platformOverviewService.getOverview(period.from, period.to, period.isDefault);
   }
 
   @Get('transport-company-volumes')
@@ -77,10 +73,7 @@ export class PlatformController {
  * (FR-005): a caller comparing the echoed range against its own month boundary
  * would be re-deriving a fact the platform already knows.
  */
-function resolvePeriod(
-  from?: string,
-  to?: string,
-): { from: Date; to: Date; isDefault: boolean } {
+function resolvePeriod(from?: string, to?: string): { from: Date; to: Date; isDefault: boolean } {
   const now = new Date();
   const isDefault = !from && !to;
   return {

@@ -23,7 +23,9 @@ describe('getCashbackOwed nets payouts against credits (FR-067)', () => {
   const companyId = new Types.ObjectId();
 
   /** Rows the fake model returns, keyed by the `kind` the query asked for. */
-  let rowsByKind: Partial<Record<AccountMovementKind, { amount: number; reversalOfId?: unknown }[]>>;
+  let rowsByKind: Partial<
+    Record<AccountMovementKind, { amount: number; reversalOfId?: unknown }[]>
+  >;
   let service: PlatformAccountService;
 
   beforeEach(async () => {
@@ -106,14 +108,8 @@ describe('AccountMovementDirection is total over AccountMovementKind (FR-064)', 
    * charged to it, a payment it made) is OUTBOUND.
    */
   it('points each kind the way the COMPANY experiences it (SC-011)', () => {
-    const inbound = [
-      AccountMovementKind.CASHBACK_CREDITED,
-      AccountMovementKind.CASHBACK_PAID_OUT,
-    ];
-    const outbound = [
-      AccountMovementKind.COMMISSION_CHARGED,
-      AccountMovementKind.PAYMENT_RECORDED,
-    ];
+    const inbound = [AccountMovementKind.CASHBACK_CREDITED, AccountMovementKind.CASHBACK_PAID_OUT];
+    const outbound = [AccountMovementKind.COMMISSION_CHARGED, AccountMovementKind.PAYMENT_RECORDED];
 
     for (const kind of inbound) {
       expect(directionForKind(kind)).toBe(AccountMovementDirection.INBOUND);
@@ -123,9 +119,7 @@ describe('AccountMovementDirection is total over AccountMovementKind (FR-064)', 
     }
     // Total: the two lists together must name every kind, so a kind added
     // later fails here rather than silently defaulting to one direction.
-    expect([...inbound, ...outbound].sort()).toEqual(
-      Object.values(AccountMovementKind).sort(),
-    );
+    expect([...inbound, ...outbound].sort()).toEqual(Object.values(AccountMovementKind).sort());
   });
 
   /**

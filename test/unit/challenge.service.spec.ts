@@ -1,6 +1,9 @@
 import { createHash } from 'node:crypto';
 import { ConfigService } from '@nestjs/config';
-import { ChallengeService, leadingZeroBits } from '../../src/modules/auth/services/challenge.service';
+import {
+  ChallengeService,
+  leadingZeroBits,
+} from '../../src/modules/auth/services/challenge.service';
 
 /**
  * spec 015 US3 T075 — the self-hosted proof-of-work (research R7).

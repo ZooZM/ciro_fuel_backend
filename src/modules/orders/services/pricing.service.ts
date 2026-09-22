@@ -4,7 +4,7 @@ import { CompaniesService } from '../../companies/companies.service';
 import { TransportPricingService, DeliveryTarget } from './transport-pricing.service';
 import { FuelType } from '../../../common/enums/fuel-type.enum';
 import { ErrorCode } from '../../../common/enums/error-code.enum';
-import { DEFAULT_CURRENCY, roundCurrency } from '../../../common/constants/money.constants';
+import { DEFAULT_CURRENCY } from '../../../common/constants/money.constants';
 import { PriceBreakdown } from '../schemas/order.schema';
 import { derivePriceBreakdown } from '../../../common/pricing/derive-price-breakdown';
 

@@ -87,7 +87,10 @@ describe('Transport price for the company that will actually haul it', () => {
   });
 
   it('refuses when no warehouse supplies the grade, since there is no distance', async () => {
-    const service = build([{ regionCode: RegionCode.MAKKAH, pricePerKm: 1.8, minPrice: 120 }], null);
+    const service = build(
+      [{ regionCode: RegionCode.MAKKAH, pricePerKm: 1.8, minPrice: 120 }],
+      null,
+    );
 
     await expect(service.feeForCompany('t1', TARGET, FuelType.DIESEL)).rejects.toBeInstanceOf(
       ConflictException,

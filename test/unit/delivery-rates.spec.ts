@@ -51,7 +51,7 @@ describe('Transport delivery rates — the transporter sets what delivery costs'
     expect(saved.deliveryRates).toBeUndefined();
   });
 
-  it('leaves an unchanged area\'s updatedAt alone when another area is edited', async () => {
+  it("leaves an unchanged area's updatedAt alone when another area is edited", async () => {
     // The client sends the whole set back when one row is edited, so a blind
     // overwrite would restamp every area on every save — the same defect the fuel
     // price history had, in a second place.
@@ -60,7 +60,12 @@ describe('Transport delivery rates — the transporter sets what delivery costs'
       type: CompanyType.TRANSPORT,
       deliveryRates: [
         { regionCode: RegionCode.MAKKAH, pricePerKm: 1.8, minPrice: 120, updatedAt: longAgo },
-        { regionCode: RegionCode.EASTERN_PROVINCE, pricePerKm: 2.0, minPrice: 150, updatedAt: longAgo },
+        {
+          regionCode: RegionCode.EASTERN_PROVINCE,
+          pricePerKm: 2.0,
+          minPrice: 150,
+          updatedAt: longAgo,
+        },
       ],
     });
 
@@ -89,7 +94,12 @@ describe('Transport delivery rates — the transporter sets what delivery costs'
 
     await service.setDeliveryRates('t1', [
       { regionCode: RegionCode.MAKKAH, pricePerKm: 1.8, minPrice: 120 },
-      { regionCode: RegionCode.MAKKAH, governorateCode: GovernorateCode.JEDDAH, pricePerKm: 2.4, minPrice: 200 },
+      {
+        regionCode: RegionCode.MAKKAH,
+        governorateCode: GovernorateCode.JEDDAH,
+        pricePerKm: 2.4,
+        minPrice: 200,
+      },
     ]);
 
     expect(saved.deliveryRates).toHaveLength(2);

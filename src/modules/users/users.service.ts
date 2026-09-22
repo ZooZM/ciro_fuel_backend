@@ -388,17 +388,9 @@ export class UsersService {
    * (FR-035). There is no body and no way to close another device's
    * session. Returns the user so the caller can write the SIGNED_OUT row.
    */
-  async closeSession(
-    userId: string,
-    sid: string,
-    session?: ClientSession,
-  ): Promise<UserDocument> {
+  async closeSession(userId: string, sid: string, session?: ClientSession): Promise<UserDocument> {
     const user = await this.userModel
-      .findByIdAndUpdate(
-        userId,
-        { $pull: { activeSessions: { sid } } },
-        { new: true, session },
-      )
+      .findByIdAndUpdate(userId, { $pull: { activeSessions: { sid } } }, { new: true, session })
       .exec();
     if (!user) {
       throw new NotFoundException('User not found');
@@ -486,7 +478,11 @@ export class UsersService {
   // `SUPER_ADMIN`, who bypasses the plugin entirely, this is the ONLY thing that can
   // narrow the result to one company's users at all — omitting it for that role would
   // return every user on the platform.
-  findAll(filter: { role?: UserRole; isActive?: boolean; companyId?: string }): Promise<UserDocument[]> {
+  findAll(filter: {
+    role?: UserRole;
+    isActive?: boolean;
+    companyId?: string;
+  }): Promise<UserDocument[]> {
     const query: FilterQuery<UserDocument> = {};
     if (filter.role !== undefined) {
       query.role = filter.role;

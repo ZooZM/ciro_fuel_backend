@@ -5,9 +5,13 @@ import { UsersService } from '../../src/modules/users/users.service';
  * primitives from research R2, against a fake model so the eviction ordering
  * and the "no generation bump on close" guarantee are asserted in isolation.
  */
+
+/** A Mongo update document, as recorded: one or more operators, each a field map. */
+type RecordedUpdate = Record<string, Record<string, unknown>>;
+
 interface FakeCalls {
-  updateOne: { filter: unknown; update: any; opts: unknown }[];
-  findByIdAndUpdate: { id: unknown; update: any; opts: unknown }[];
+  updateOne: { filter: unknown; update: RecordedUpdate; opts: unknown }[];
+  findByIdAndUpdate: { id: unknown; update: RecordedUpdate; opts: unknown }[];
 }
 
 function fakeUserModel(doc: unknown) {
@@ -15,11 +19,11 @@ function fakeUserModel(doc: unknown) {
   return {
     calls,
     findById: () => ({ session: () => ({ exec: async () => doc }) }),
-    updateOne: (filter: unknown, update: unknown, opts: unknown) => {
+    updateOne: (filter: unknown, update: RecordedUpdate, opts: unknown) => {
       calls.updateOne.push({ filter, update, opts });
       return { exec: async () => ({ acknowledged: true, modifiedCount: 1 }) };
     },
-    findByIdAndUpdate: (id: unknown, update: unknown, opts: unknown) => {
+    findByIdAndUpdate: (id: unknown, update: RecordedUpdate, opts: unknown) => {
       calls.findByIdAndUpdate.push({ id, update, opts });
       return { exec: async () => ({ ...(doc as object), _id: id }) };
     },

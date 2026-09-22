@@ -145,9 +145,7 @@ describe('The operator onboards and oversees transport companies (US4)', () => {
         fixtures.superAdmin.token,
         onboardBody({ parentFuelCompanyId: new Types.ObjectId().toString() }),
       ).expect(400);
-      expect(res.body.error ?? res.body.message?.error).toBe(
-        ErrorCode.INVALID_PARENT_FUEL_COMPANY,
-      );
+      expect(res.body.error ?? res.body.message?.error).toBe(ErrorCode.INVALID_PARENT_FUEL_COMPANY);
       expect(await counts()).toEqual(before);
     });
 
@@ -160,9 +158,7 @@ describe('The operator onboards and oversees transport companies (US4)', () => {
         fixtures.superAdmin.token,
         onboardBody({ parentFuelCompanyId: fixtures.companyA.transportCompanyId }),
       ).expect(400);
-      expect(res.body.error ?? res.body.message?.error).toBe(
-        ErrorCode.INVALID_PARENT_FUEL_COMPANY,
-      );
+      expect(res.body.error ?? res.body.message?.error).toBe(ErrorCode.INVALID_PARENT_FUEL_COMPANY);
       expect(await counts()).toEqual(before);
     });
   });
@@ -279,13 +275,10 @@ describe('The operator onboards and oversees transport companies (US4)', () => {
           connection.collection('companies').findOne({ _id: new Types.ObjectId(id) }),
         ),
       );
-      const shapeOf = (doc: Record<string, unknown> | null) =>
-        Object.keys(doc ?? {}).sort();
+      const shapeOf = (doc: Record<string, unknown> | null) => Object.keys(doc ?? {}).sort();
       expect(shapeOf(viaOperator)).toEqual(shapeOf(viaParent));
       expect(viaOperator!.type).toBe(viaParent!.type);
-      expect(String(viaOperator!.parentFuelCompanyId)).toBe(
-        String(viaParent!.parentFuelCompanyId),
-      );
+      expect(String(viaOperator!.parentFuelCompanyId)).toBe(String(viaParent!.parentFuelCompanyId));
       expect(viaOperator!.status).toBe(viaParent!.status);
     });
 

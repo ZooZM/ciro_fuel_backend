@@ -50,7 +50,8 @@ interface CompanyContact {
 export class FuelExchangeService {
   constructor(
     @InjectModel(ExchangeOffer.name) private readonly offerModel: Model<ExchangeOfferDocument>,
-    @InjectModel(ExchangeProposal.name) private readonly proposalModel: Model<ExchangeProposalDocument>,
+    @InjectModel(ExchangeProposal.name)
+    private readonly proposalModel: Model<ExchangeProposalDocument>,
     @InjectModel(User.name) private readonly userModel: Model<UserDocument>,
     @InjectConnection() private readonly connection: Connection,
     private readonly companiesService: CompaniesService,
@@ -132,7 +133,9 @@ export class FuelExchangeService {
    * this feature's own e2e suite: company C, diesel-only, was seeing a PETROL_95
    * market offer in its incoming list before this fix).
    */
-  private async buildIncomingFilter(actingCompanyId: string): Promise<FilterQuery<ExchangeOfferDocument>> {
+  private async buildIncomingFilter(
+    actingCompanyId: string,
+  ): Promise<FilterQuery<ExchangeOfferDocument>> {
     const acting = new Types.ObjectId(actingCompanyId);
     const [suspended, company] = await Promise.all([
       this.companiesService.findSuspendedFuelCompanyIds(),
@@ -182,7 +185,9 @@ export class FuelExchangeService {
     } else {
       // Nested under `$and` for the same reason `buildIncomingFilter` is — a
       // top-level `$or` here would be overwritten by the isolation plugin's own.
-      filter = { $and: [{ $or: [outgoingFilter, await this.buildIncomingFilter(actingCompanyId)] }] };
+      filter = {
+        $and: [{ $or: [outgoingFilter, await this.buildIncomingFilter(actingCompanyId)] }],
+      };
     }
     if (effectiveState) {
       filter = { $and: [filter, { state: effectiveState }] };
@@ -194,7 +199,9 @@ export class FuelExchangeService {
   }
 
   /** SUPER_ADMIN's own listing — read-only, every company, no direction (FR-023). */
-  async findAllForOperator(cursor: string | undefined): Promise<PaginatedResponse<ExchangeOfferDocument>> {
+  async findAllForOperator(
+    cursor: string | undefined,
+  ): Promise<PaginatedResponse<ExchangeOfferDocument>> {
     return paginate(this.offerModel, {}, EXCHANGE_SORT_KEYS, cursor);
   }
 
@@ -223,14 +230,20 @@ export class FuelExchangeService {
       offers.map(async (offer) => {
         const isRaiser = String(offer.raisedByCompanyId) === actingCompanyId;
         const includeAgreed =
-          isRaiser || (offer.state === ExchangeOfferState.AWARDED && String(offer.awardedCompanyId) === actingCompanyId);
+          isRaiser ||
+          (offer.state === ExchangeOfferState.AWARDED &&
+            String(offer.awardedCompanyId) === actingCompanyId);
         const item = this.toOfferSummary(offer, { includeAgreed });
         item.raisedByCompanyName = names.get(String(offer.raisedByCompanyId));
 
         if (isRaiser) {
           const [proposalCount, declineCount] = await Promise.all([
-            this.proposalModel.countDocuments({ offerId: offer._id, outcome: { $ne: ProposalOutcome.DECLINED } }).exec(),
-            this.proposalModel.countDocuments({ offerId: offer._id, outcome: ProposalOutcome.DECLINED }).exec(),
+            this.proposalModel
+              .countDocuments({ offerId: offer._id, outcome: { $ne: ProposalOutcome.DECLINED } })
+              .exec(),
+            this.proposalModel
+              .countDocuments({ offerId: offer._id, outcome: ProposalOutcome.DECLINED })
+              .exec(),
           ]);
           item.proposalCount = proposalCount;
           item.declineCount = declineCount;
@@ -346,7 +359,9 @@ export class FuelExchangeService {
       actingCompanyId === String(offer.awardedCompanyId);
 
     const raiserCompany = await this.companiesService.findById(offer.raisedByCompanyId);
-    const result = this.toOfferSummary(offer, { includeAgreed: isRaiser || isSuperAdmin || isAwardedCompany });
+    const result = this.toOfferSummary(offer, {
+      includeAgreed: isRaiser || isSuperAdmin || isAwardedCompany,
+    });
     // FR-019: a company NAME alone is disclosed regardless of state — contact
     // details are the boundary, gated below.
     result.raisedByCompanyName = raiserCompany.name;
@@ -365,7 +380,11 @@ export class FuelExchangeService {
           const company = await this.companiesService.findById(p.proposingCompanyId);
           return this.toProposalShape(p, offer.quantityLitres, {
             revealIdentity: true,
-            company: { name: company.name, contactEmail: company.contactEmail, contactPhone: company.contactPhone },
+            company: {
+              name: company.name,
+              contactEmail: company.contactEmail,
+              contactPhone: company.contactPhone,
+            },
           });
         }),
       );
@@ -500,7 +519,9 @@ export class FuelExchangeService {
     // (FR-014a), not a misleading 404 that looks like the proposal never existed. A
     // DECLINED proposal is the one outcome that can never be awarded, at any offer
     // state, so it alone is refused here.
-    const proposal = await this.proposalModel.findOne({ _id: proposalId, offerId: offer._id }).exec();
+    const proposal = await this.proposalModel
+      .findOne({ _id: proposalId, offerId: offer._id })
+      .exec();
     if (!proposal || proposal.outcome === ProposalOutcome.DECLINED) {
       throw new NotFoundException('Proposal not found');
     }
@@ -566,7 +587,10 @@ export class FuelExchangeService {
 
   /** T068/FR-031 — the winner learns it won; every OTHER proposer learns only that
    * the offer closed, with no company name and no price. */
-  private async notifyAward(offer: ExchangeOfferDocument, winnerCompanyId: Types.ObjectId): Promise<void> {
+  private async notifyAward(
+    offer: ExchangeOfferDocument,
+    winnerCompanyId: Types.ObjectId,
+  ): Promise<void> {
     const [winnerAdmins, losers] = await Promise.all([
       this.resolveRecipientAdmins([winnerCompanyId]),
       this.proposalModel
@@ -576,8 +600,12 @@ export class FuelExchangeService {
     ]);
     const loserAdmins = await this.resolveRecipientAdmins(losers as Types.ObjectId[]);
     await Promise.all([
-      this.notifyMany(winnerAdmins, NotificationType.EXCHANGE_OFFER_AWARDED, { offerId: String(offer._id) }),
-      this.notifyMany(loserAdmins, NotificationType.EXCHANGE_OFFER_CLOSED, { offerId: String(offer._id) }),
+      this.notifyMany(winnerAdmins, NotificationType.EXCHANGE_OFFER_AWARDED, {
+        offerId: String(offer._id),
+      }),
+      this.notifyMany(loserAdmins, NotificationType.EXCHANGE_OFFER_CLOSED, {
+        offerId: String(offer._id),
+      }),
     ]);
   }
 
@@ -586,7 +614,11 @@ export class FuelExchangeService {
   // ======================================================================
 
   /** T078/T079/FR-014b/FR-016 — same conditional-update idiom as {@link award}. */
-  async withdraw(offerId: string, actingCompanyId: string, actingUserId: string): Promise<ExchangeOfferDocument> {
+  async withdraw(
+    offerId: string,
+    actingCompanyId: string,
+    actingUserId: string,
+  ): Promise<ExchangeOfferDocument> {
     const offer = await this.offerModel.findById(offerId).exec();
     if (!offer || String(offer.raisedByCompanyId) !== actingCompanyId) {
       throw new NotFoundException('Exchange offer not found');
@@ -656,7 +688,9 @@ export class FuelExchangeService {
           _id: { $nin: answeredOfferIds },
         })
         .exec(),
-      this.offerModel.countDocuments({ raisedByCompanyId: acting, state: ExchangeOfferState.OPEN }).exec(),
+      this.offerModel
+        .countDocuments({ raisedByCompanyId: acting, state: ExchangeOfferState.OPEN })
+        .exec(),
       this.offerModel
         .countDocuments({
           // Nested under `$and` — see `buildIncomingFilter`'s comment: a top-level

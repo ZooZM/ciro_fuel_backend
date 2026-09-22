@@ -39,11 +39,7 @@ describe('CreditLimitRequestsService (non-transactional paths)', () => {
     ) as unknown as mongoose.Model<CreditLimitRequestDocument>;
     // `create`/`findForCompany`/`findForClient` never touch usersService or connection —
     // only `resolve` does, which this file deliberately does not exercise.
-    service = new CreditLimitRequestsService(
-      RequestModel,
-      {} as UsersService,
-      {} as Connection,
-    );
+    service = new CreditLimitRequestsService(RequestModel, {} as UsersService, {} as Connection);
   }, 120_000);
 
   afterAll(async () => {
@@ -97,7 +93,7 @@ describe('CreditLimitRequestsService (non-transactional paths)', () => {
     expect(all).toHaveLength(2);
   });
 
-  it('findForClient returns only that client\'s requests, most recent first', async () => {
+  it("findForClient returns only that client's requests, most recent first", async () => {
     const otherClient = new mongoose.Types.ObjectId().toString();
     await service.create(otherClient, companyId, 1000);
     await service.create(clientId, companyId, 2000);

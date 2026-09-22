@@ -39,14 +39,22 @@ describe('Litre balance drawdown at order creation (US11, FR-074)', () => {
     const uploaded = await request(server)
       .post(`/api/v1/orders/${created.body._id}/supplier-invoice/upload`)
       .set('Authorization', `Bearer ${fixture.admin.token}`)
-      .attach('file', Buffer.from('%PDF fake'), { filename: 'inv.pdf', contentType: 'application/pdf' })
+      .attach('file', Buffer.from('%PDF fake'), {
+        filename: 'inv.pdf',
+        contentType: 'application/pdf',
+      })
       .expect(201);
     await request(server)
       .post(`/api/v1/orders/${created.body._id}/supplier-invoice`)
       .set('Authorization', `Bearer ${fixture.admin.token}`)
       .send({
         fileId: uploaded.body.fileId,
-        confirmed: { quantityLitres: suppliedLiters, fuelType: 'DIESEL', reference: 'r', issueDate: '2026-02-01' },
+        confirmed: {
+          quantityLitres: suppliedLiters,
+          fuelType: 'DIESEL',
+          reference: 'r',
+          issueDate: '2026-02-01',
+        },
       })
       .expect(201);
   }
@@ -87,7 +95,9 @@ describe('Litre balance drawdown at order creation (US11, FR-074)', () => {
       .get('/api/v1/users/me/litre-balances')
       .set('Authorization', `Bearer ${client.token}`)
       .expect(200);
-    const dieselBefore = beforeBalance.body.items.find((b: { fuelType: string }) => b.fuelType === 'DIESEL');
+    const dieselBefore = beforeBalance.body.items.find(
+      (b: { fuelType: string }) => b.fuelType === 'DIESEL',
+    );
     const balanceBeforeOrder = dieselBefore.balanceLitres;
     expect(balanceBeforeOrder).toBeGreaterThanOrEqual(300);
 
@@ -104,10 +114,13 @@ describe('Litre balance drawdown at order creation (US11, FR-074)', () => {
       .get('/api/v1/users/me/litre-balances')
       .set('Authorization', `Bearer ${client.token}`)
       .expect(200);
-    const dieselAfter = afterBalance.body.items.find((b: { fuelType: string }) => b.fuelType === 'DIESEL');
+    const dieselAfter = afterBalance.body.items.find(
+      (b: { fuelType: string }) => b.fuelType === 'DIESEL',
+    );
     expect(dieselAfter.balanceLitres).toBeCloseTo(balanceBeforeOrder - 100, 3);
     const drawdownMovement = dieselAfter.movements.find(
-      (m: { orderId: string; kind: string }) => m.orderId === order.body._id && m.kind === 'ORDER_DRAWDOWN',
+      (m: { orderId: string; kind: string }) =>
+        m.orderId === order.body._id && m.kind === 'ORDER_DRAWDOWN',
     );
     expect(drawdownMovement).toBeDefined();
     expect(drawdownMovement.litres).toBeCloseTo(-100, 3);
@@ -123,7 +136,9 @@ describe('Litre balance drawdown at order creation (US11, FR-074)', () => {
       .get('/api/v1/users/me/litre-balances')
       .set('Authorization', `Bearer ${client.token}`)
       .expect(200);
-    const balanceBefore = before.body.items.find((b: { fuelType: string }) => b.fuelType === 'DIESEL').balanceLitres;
+    const balanceBefore = before.body.items.find(
+      (b: { fuelType: string }) => b.fuelType === 'DIESEL',
+    ).balanceLitres;
 
     const order = await request(server)
       .post('/api/v1/orders')
@@ -142,11 +157,14 @@ describe('Litre balance drawdown at order creation (US11, FR-074)', () => {
       .get('/api/v1/users/me/litre-balances')
       .set('Authorization', `Bearer ${client.token}`)
       .expect(200);
-    const balanceAfter = after.body.items.find((b: { fuelType: string }) => b.fuelType === 'DIESEL').balanceLitres;
+    const balanceAfter = after.body.items.find(
+      (b: { fuelType: string }) => b.fuelType === 'DIESEL',
+    ).balanceLitres;
     expect(balanceAfter).toBeCloseTo(balanceBefore, 3);
     const dieselAfter = after.body.items.find((b: { fuelType: string }) => b.fuelType === 'DIESEL');
     const returned = dieselAfter.movements.find(
-      (m: { orderId: string; kind: string }) => m.orderId === order.body._id && m.kind === 'DRAWDOWN_RETURNED',
+      (m: { orderId: string; kind: string }) =>
+        m.orderId === order.body._id && m.kind === 'DRAWDOWN_RETURNED',
     );
     expect(returned).toBeDefined();
     expect(returned.litres).toBeCloseTo(50, 3);
@@ -167,7 +185,9 @@ describe('Litre balance drawdown at order creation (US11, FR-074)', () => {
       .get('/api/v1/users/me/litre-balances')
       .set('Authorization', `Bearer ${client.token}`)
       .expect(200);
-    const balanceBefore = before.body.items.find((b: { fuelType: string }) => b.fuelType === 'DIESEL').balanceLitres;
+    const balanceBefore = before.body.items.find(
+      (b: { fuelType: string }) => b.fuelType === 'DIESEL',
+    ).balanceLitres;
 
     for (let i = 0; i < 3; i++) {
       const quote = await request(server)
@@ -182,7 +202,9 @@ describe('Litre balance drawdown at order creation (US11, FR-074)', () => {
       .get('/api/v1/users/me/litre-balances')
       .set('Authorization', `Bearer ${client.token}`)
       .expect(200);
-    const balanceAfter = after.body.items.find((b: { fuelType: string }) => b.fuelType === 'DIESEL').balanceLitres;
+    const balanceAfter = after.body.items.find(
+      (b: { fuelType: string }) => b.fuelType === 'DIESEL',
+    ).balanceLitres;
     expect(balanceAfter).toBeCloseTo(balanceBefore, 3);
   });
 });
